@@ -1,3 +1,4 @@
 financial_agent
 __pycache__/
 .env
+venv/
