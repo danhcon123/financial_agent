@@ -2,3 +2,9 @@ financial_agent
 __pycache__/
 .env
 venv/
+*.pyc
+.pytest_cache/
+data/
+*.log
+.vscode/
+.idea/
