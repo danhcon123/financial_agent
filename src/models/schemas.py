@@ -14,7 +14,7 @@ class ResearchRequest(BaseModel):
     ticker: Optional[str] = Field(None, description="Stock ticker symbol")
     horizon: str = Field("6-12 months", description="Investment time horizon")
     risk_profile: str = Field("balanced", description="Risk tolerance level")
-    constrainst: List[str] = Field(default_factory=list, description="Investment constraints")
+    constraints: List[str] = Field(default_factory=list, description="Investment constraints")
     max_iterations: int = Field(1, ge=0, le=5, description="Max analyst-critic refinement cycles")
 
 
