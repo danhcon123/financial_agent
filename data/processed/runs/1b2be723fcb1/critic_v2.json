@@ -1,0 +1,37 @@
+{
+  "assessment": "MODERATE",
+  "critical_issues": [
+    {
+      "issue": "Bullet 2 cites E2 for forward guidance but references 'historical trends' without explicit citation to E1, creating a logical inconsistency between historical and forward-looking claims. E1 should cover historical data, but the bullet implies it may not be adequately supported.",
+      "severity": "HIGH"
+    },
+    {
+      "issue": "The thesis and bullets rely on management guidance (E2) and valuation metrics (E3) without providing concrete data or context, leading to potential overreliance on unverified assumptions and increased risk of confirmation bias.",
+      "severity": "MEDIUM"
+    },
+    {
+      "issue": "Risk profile includes high-severity economic downturns but lacks specific counterarguments or mitigation strategies, potentially underestimating the impact on Azure's growth.",
+      "severity": "MEDIUM"
+    }
+  ],
+  "missing_evidence": [
+    "Detailed historical growth data for Azure from E1, including specific metrics and time periods.",
+    "Actual management guidance details from E2, such as the basis for 10-15% growth projections and sensitivity to external factors.",
+    "Specific peer comparison data for valuation metrics in E3, including which peers and exact metric comparisons.",
+    "Analysis of competitive threats from AWS and other providers, including market share data and potential erosion of Azure's leadership."
+  ],
+  "unsupported_claims": [
+    "Bullet 2's claim of 'supported by historical trends' without clear citation to E1 or other evidence, as E2 is forward-focused and may not address historical context.",
+    "Valuation metrics claim in bullet 4 assumes 'forward P/E ratios below historical averages' without specifying the averages or the benchmark period, making it potentially cherry-picked."
+  ],
+  "contradictory_evidence": [
+    "Historical data may show periods of slowed growth or saturation, challenging the thesis's implication of sustained high growth.",
+    "Competitor actions, such as AWS's aggressive pricing, could undermine Azure's market share gains, contradicting the thesis's emphasis on Azure's strengths."
+  ],
+  "recommended_revisions": [
+    "Specify the content of E1, E2, and E3 with actual data sources or provide standalone evidence for historical trends and guidance to avoid ambiguity.",
+    "Separate historical claims (citing E1) from forward guidance (E2) to ensure logical consistency and reduce the risk of misinterpretation.",
+    "Include a counterfactual analysis for risks, such as scenarios where Azure fails to meet growth targets due to competitive pressures, to balance the thesis.",
+    "Add citations for all qualitative claims, e.g., how 'digital transformation' drives growth, by referencing specific data or studies."
+  ]
+}
