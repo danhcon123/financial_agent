@@ -1,0 +1,35 @@
+{
+  "assessment": "MODERATE",
+  "critical_issues": [
+    {
+      "issue": "Thesis makes a broad claim about Tesla's business model relying on EV and energy storage growth without explicit citation to a specific evidence source (E1), creating a gap in foundational support.",
+      "severity": "HIGH"
+    },
+    {
+      "issue": "Bulleted points assume data from E2 and E3 but lack demonstration of how these specific pieces of evidence directly support the thesis, potentially leading to circular reasoning.",
+      "severity": "HIGH"
+    },
+    {
+      "issue": "NO_TRADE recommendation conflicts with the high-risk, high-reward framing by not fully aligning with aggressive risk profile, possibly indicating a conservative bias or inadequate upside assessment.",
+      "severity": "MEDIUM"
+    }
+  ],
+  "missing_evidence": [
+    "Detailed historical and projected data on Tesla's EV and energy storage revenue growth to back 'business model relies' claim",
+    "Specific analysis of how sentiment and regulatory changes have historically impacted Tesla's performance",
+    "Quantitative data on margin compression risks from comparable companies or industry reports"
+  ],
+  "unsupported_claims": [
+    "Tesla's business model relies on electric vehicle and energy storage growth",
+    "Data gaps limit confidence in short-term performance"
+  ],
+  "contradictory_evidence": [
+    "Recent regulatory investigations or trade policies could negatively impact Tesla's operations and stock, contradicting the thesis' reliance on sentiment and regulatory outcomes",
+    "Competition from traditional automakers has already eroded Tesla's market share, potentially offsetting EV growth projections"
+  ],
+  "recommended_revisions": [
+    "Define and provide details for each evidence ID (E1, E2, E3) to ensure all claims are directly supported",
+    "Include a balanced upside/downside scenario analysis for the 6-month horizon, incorporating catalyst failures",
+    "Add counterarguments or alternative explanations for Tesla's performance, such as dependency on Elon Musk's influence, to avoid confirmation bias"
+  ]
+}
