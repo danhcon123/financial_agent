@@ -12,7 +12,7 @@ async def test_slice0_basic_workflow():
         ticker="TSLA",
         horizon="6 months",
         risk_profile="aggressive",
-        constrainst=["avoid options"],
+        constraints=["avoid options"],
         max_iterations=1
     )
 

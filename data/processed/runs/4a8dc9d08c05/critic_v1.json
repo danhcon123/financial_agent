@@ -1,0 +1,32 @@
+{
+  "assessment": "MODERATE",
+  "critical_issues": [
+    {
+      "issue": "Thesis relies heavily on unspecified evidence stubs (E1, E2, E3) without detailed data, making claims potentially overconfident and unverifiable.",
+      "severity": "HIGH"
+    },
+    {
+      "issue": "Short-term risks of price volatility are acknowledged but not adequately integrated with the investment recommendation, lacking a clear strategy to mitigate or exploit volatility in a 6-month horizon.",
+      "severity": "HIGH"
+    },
+    {
+      "issue": "Risks are enumerated but not quantified or contextualized within the thesis, failing to provide a balanced view against the growth potential.",
+      "severity": "MEDIUM"
+    }
+  ],
+  "missing_evidence": [
+    "Quantitative data on Tesla's historical volatility and its correlation with investment performance over similar time frames",
+    "Detailed competitive analysis including market share trends and BYD's impact on Tesla's leadership",
+    "Evidence linking Tesla's valuation metrics to actual financial outcomes and downside scenarios under macroeconomic stress"
+  ],
+  "unsupported_claims": [],
+  "contradictory_evidence": [
+    "Tesla's stock has experienced significant drawdowns during periods of high volatility, contradicting the thesis that short-term risks are manageable for aggressive investors",
+    "BYD's rapid growth in EV market share in Asia has pressured Tesla's dominance, potentially undermining the thesis on market leadership"
+  ],
+  "recommended_revisions": [
+    "Specify and validate the evidence for each claim (e.g., provide data sources for E1, E2, E3) to ensure robustness",
+    "Incorporate a volatility risk assessment, including historical data and potential strategies to hedge or capitalize on it in a 6-month horizon",
+    "Add counterfactual analysis, such as scenarios where key risks materialize (e.g., regulatory changes leading to reduced EV demand), and revise thesis accordingly"
+  ]
+}

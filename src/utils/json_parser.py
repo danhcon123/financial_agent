@@ -30,7 +30,15 @@ def parse_json_safely(
     Returns:
         Parsed JSON dict or safe fallback
     """
-    if not text or not text.strip():
+    # Handle already parsed JSON (from LangChain)
+    if isinstance(text, dict):
+        return text
+    if isinstance(text, list):
+        logger.warning("Received list instead of dict, wrapping in default structure")
+        return default_value or {}
+
+    # Original string handling
+    if not text or not text.strip() or not isinstance(text, str):
         logger.warning("Empty text provided to JSON parser")
         return default_value or {}
     
@@ -103,7 +111,11 @@ def safe_list_extract(data: Dict[str, Any], key: str, max_items: int = 10) -> li
         return []
     
     # Filter to non-empty strings and truncate
-    result = [str(item).strip for item in raw if str(item).strip()]
+    result = []
+    for item in raw:
+        text = str(item).strip()
+        if text:
+            result.append(text)
 
     if len(result) > max_items:
         logger.warning(f"Truncating list '{key}' from {len(result)} to {max_items} items")

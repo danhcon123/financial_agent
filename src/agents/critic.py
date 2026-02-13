@@ -1,9 +1,10 @@
 from langchain_ollama import ChatOllama
+from langchain_core.callbacks import StreamingStdOutCallbackHandler
 from langchain_core.messages import SystemMessage, HumanMessage
 from typing import List
 
-from config.settings import get_settings
-from config.prompts import CRITIC_SYSTEM_PROMPT
+from src.config.settings import get_settings
+from src.config.prompts import CRITIC_SYSTEM_PROMPT
 from src.models.schemas import ResearchRequest, EvidenceItem, AnalystOutput, CriticOutput, CriticIssue
 from src.models.enums import CritiqueSeverity
 from src.utils.logger import get_logger
@@ -21,6 +22,8 @@ class CriticAgent:
             base_url=settings.ollama_base_url,
             model=settings.ollama_model,
             temperature=0.7,
+            callbacks=[StreamingStdOutCallbackHandler()],
+
         )
         
     async def review(
@@ -118,7 +121,7 @@ Be specific, constructive, and prioritize  high-severity issues.
             assessment = "MODERATE"
 
         # Parse critical issues with severity
-        critical_issues = self._parse_critic_output(data.get("critical_issues", []))
+        critical_issues = self._parse_critical_issue(data.get("critical_issues", []))
 
         # Extract other fields
         missing_evidence = safe_list_extract(data, "missing_evidence", max_items=8)

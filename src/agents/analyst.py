@@ -1,9 +1,10 @@
 from langchain_ollama import ChatOllama
 from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.callbacks import StreamingStdOutCallbackHandler
 from typing import List, Optional
 
-from config.settings import get_settings
-from config.prompts import ANALYST_SYSTEM_PROMPT, REVISION_CONTEXT_TEMPLATE
+from src.config.settings import get_settings
+from src.config.prompts import ANALYST_SYSTEM_PROMPT, REVISION_CONTEXT_TEMPLATE
 from src.models.schemas import ResearchRequest, EvidenceItem, AnalystOutput, CriticOutput
 from src.models.enums import SignalType
 from src.utils.logger import get_logger
@@ -20,6 +21,7 @@ class AnalystAgent:
             base_url=settings.ollama_base_url,
             model=settings.ollama_model,
             temperature=settings.ollama_temperature,
+            callbacks=[StreamingStdOutCallbackHandler()],
         )
 
     async def draft(
@@ -91,9 +93,9 @@ Generate an investment thesis addressing the research query. Respond with ONLY v
     "thesis": "1-2 paragraph investment thesis",
     "bullets": ["testable point 1", "testable point 2", "..."],
     "risks": ["risk 1", "risk 2", "..."],
-    "catalyst": ["catalyst 1", "catalyst 2"],
+    "catalysts": ["catalyst 1", "catalyst 2"],
     "citations": ["E1", "E2"],
-    "recommended_action": "LONG|SHORT|HOLD|NO_TRADE"
+    "recommended_action": "LONG or SHORT or HOLD or NO_TRADE"
 }}
 
 Requirements:
@@ -119,7 +121,7 @@ Requirements:
             for i, critique in enumerate(critique_history)
         )
 
-        current_json = current.model_dump_json(ident=2)
+        current_json = current.model_dump_json(indent=2)
 
         return f"""Revise your investment thesis based on critic feedback.
 
@@ -136,7 +138,7 @@ Available Evidence:
 {evidence_text}
 
 Task:
-Producae a revised thesis addressing all critique issues. Respond with ONLY valid JSON using the same structure:
+Produce a revised thesis addressing all critique issues. Respond with ONLY valid JSON using the same structure:
 
 Requirements:
 - Address all HIGH severity issues

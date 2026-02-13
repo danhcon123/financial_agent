@@ -1,5 +1,5 @@
 from __future__ import annotations
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Any, Dict, List, Optional, Literal
 from datetime import datetime
 from .enums import SignalType, CritiqueSeverity, StepStatus
@@ -31,7 +31,7 @@ class EvidenceItem(BaseModel):
     confidence: float = Field(0.5, ge=0.0, le=1.0, description="Confidence score")
     raw: Optional[Dict[str, Any]] = Field(None, description="Raw data payload")
 
-    class Config:
+    model_config = ConfigDict(
         json_schema_extra = {
             "example": {
                 "id": "E1",
@@ -40,6 +40,7 @@ class EvidenceItem(BaseModel):
                 "confidence": 0.9
             }
         }
+    )
 
 # ==========================================================
 # ANALYST OUTPUT
@@ -47,6 +48,8 @@ class EvidenceItem(BaseModel):
 
 class AnalystOutput(BaseModel):
     """Structured investment thesis from analyst agent"""
+    model_config=ConfigDict(use_enum_values=True)
+    
     thesis: str = Field(..., description="Investment thesis (1-2 paragraphs)")
     bullets: List[str] = Field(
         default_factory=list,
@@ -75,9 +78,6 @@ class AnalystOutput(BaseModel):
         if not v or not v.strip():
             raise ValueError("Thesis cannot be empty")
         return v.strip()
-    
-    class Config:
-        use_enum_values=True
 
 # ==========================================================
 # CRITIC OUTPUT
@@ -85,11 +85,10 @@ class AnalystOutput(BaseModel):
 
 class CriticIssue(BaseModel):
     """Single critique issue with severity"""
+    model_config = ConfigDict(use_enum_values=True) 
+
     issue: str = Field(..., description="Description of the problem")
     severity: CritiqueSeverity = Field(..., description="Impact level")
-
-    class Config:
-        use_enum_values = True
 
 class CriticOutput(BaseModel):
     """Red-team evaluation from critic agent"""
@@ -136,11 +135,11 @@ class CriticOutput(BaseModel):
                 lines.append(f"-[{issue.severity}] {issue.issue}")
 
         if self.unsupported_claims:
-            lines.append("\Unsupported Claims:")
+            lines.append("\nUnsupported Claims:")
             lines.extend(f"- {claim}" for claim in self.unsupported_claims)
 
         if self.recommended_revisions:
-            lines.append("\Recommended Revisions:")
+            lines.append("\nRecommended Revisions:")
             lines.extend(f"- {rev}" for rev in self.recommended_revisions)
         
         return "\n".join(lines)
@@ -151,14 +150,13 @@ class CriticOutput(BaseModel):
 
 class StepEvent(BaseModel):
     """Single execution step for observability"""
+    model_config = ConfigDict(use_enum_values=True)
+
     step: str = Field(..., description="Step identifier")
     status: StepStatus = Field(..., description="Execution status")
     timestamp: datetime = Field(default_factory=datetime.now)
     duration_ms: Optional[float] = Field(None, description="Step duration in milliseconds")
     meta: Dict[str, Any] = Field(default_factory=dict, description="Additional context")
-
-    class Config:
-        use_enum_values=True
 
 # ==========================================================
 # FINAL OUTPUT
@@ -169,8 +167,10 @@ class RunResult(BaseModel):
     run_id: str = Field(..., description="Unique run identifier")
     request: ResearchRequest
     evidence: List[EvidenceItem] = Field(default_factory=list)
-    analyst_output: AnalystOutput
-    critic_output: CriticOutput
+    # analyst_output: AnalystOutput
+    # critic_output: CriticOutput
+    analyst_output: Optional[AnalystOutput] = None
+    critic_output: Optional[CriticOutput] = None    
     trace: List[StepEvent] = Field(default_factory=list)
     artifacts_dir: str = Field(..., description="Path to saved artifacts")
     iterations_completed: int = Field(0, description="Number of refinement cycles")
@@ -182,5 +182,6 @@ class RunResult(BaseModel):
         lines = [f"Run {self.run_id}: {'SUCCESS' if self.ok else 'FAILED'}"]
         lines.append(f"Iterations: {self.iterations_completed}/{self.request.max_iterations}")
         lines.append(f"Evidence items: {len(self.evidence)}")
-        lines.append(f"Critic assessment: {self.critic_output.assessment}")
+        if self.critic_output:
+            lines.append(f"Critic assessment: {self.critic_output.assessment}")
         return "\n".join(lines)

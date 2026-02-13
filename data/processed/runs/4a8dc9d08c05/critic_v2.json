@@ -1,0 +1,46 @@
+{
+  "assessment": "MODERATE",
+  "critical_issues": [
+    {
+      "issue": "Thesis relies heavily on low-confidence evidence stubs (E1, E2, E3) without providing detailed, verifiable data, which undermines the credibility of key claims such as Tesla's business model leadership, revenue growth, and valuation metrics.",
+      "severity": "HIGH"
+    },
+    {
+      "issue": "Risk coverage is incomplete and lacks quantification, with risks listed but not integrated into a probabilistic or scenario-based analysis, failing to adequately balance against the thesis.",
+      "severity": "MEDIUM"
+    },
+    {
+      "issue": "Potential confirmation bias is evident in the selective emphasis on Tesla's innovation and EV leadership while downplaying or vaguely addressing counterarguments without citing contradictory evidence.",
+      "severity": "LOW"
+    },
+    {
+      "issue": "Logical gaps exist in the causal chain from EV adoption growth to investment thesis, with insufficient linkage between catalysts and the 6-month horizon, and no alternative explanations for potential underperformance.",
+      "severity": "MEDIUM"
+    }
+  ],
+  "missing_evidence": [
+    "Detailed financial data (e.g., actual revenue, margins, debt levels) from reliable sources instead of low-confidence stubs",
+    "Competitive analysis data (e.g., market share, comparative performance with BYD and other EV manufacturers)",
+    "Historical and forward-looking volatility metrics, including beta calculations and stress-testing scenarios",
+    "Quantitative risk assessments, such as probability and impact analysis for regulatory changes and macroeconomic factors",
+    "Evidence of Tesla's innovation sustainability, e.g., patent filings, R&D outcomes, and customer satisfaction data"
+  ],
+  "unsupported_claims": [
+    "Revenue growth and margins detailed in financial statements stub (E2) without verification or context.",
+    "Valuation metrics from the stub suggest higher multiples with unverified growth assumptions (E3).",
+    "First-quarter deliveries increased by 15% year-over-year (E2) without citing source or verifying data accuracy.",
+    "Tesla's business model focus on electric vehicles and energy storage (E1) without elaboration on how this drives investment value."
+  ],
+  "contradictory_evidence": [
+    "Tesla's increasing debt levels could constrain financial flexibility, potentially amplifying risks as noted in risks but not substantiated with data.",
+    "Historical supply chain disruptions have impacted Tesla's production and margins, contradicting the thesis' reliance on innovation without addressing vulnerabilities.",
+    "Rising competition from BYD and other automakers may erode Tesla's market leadership, directly challenging the thesis' positive outlook on EV adoption.",
+    "Negative sentiment shifts and analyst downgrades can exacerbate volatility, with recent events showing how such factors have led to significant price declines."
+  ],
+  "recommended_revisions": [
+    "Replace stub-based evidence with primary data sources, such as SEC filings or reputable financial databases, to provide high-confidence backing for all claims.",
+    "Incorporate quantitative risk analysis, including Monte Carlo simulations or scenario planning for the 6-month horizon, to better balance risks against opportunities.",
+    "Address potential biases by conducting a counterfactual analysis, citing evidence that could falsify the thesis, and explicitly stating assumptions.",
+    "Expand the thesis to include alternative explanations for Tesla's performance, such as regulatory headwinds or market saturation, and how they might affect the investment case."
+  ]
+}

@@ -1,5 +1,5 @@
 import logging
-from config.settings import get_settings
+from src.config.settings import get_settings
 
 def get_logger(name: str) -> logging.Logger:
     """Get configured logger instance"""

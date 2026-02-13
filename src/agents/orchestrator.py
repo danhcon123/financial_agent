@@ -6,7 +6,7 @@ from datetime import datetime
 
 from langchain_core.runnables import RunnableConfig
 
-from config.settings import get_settings
+from src.config.settings import get_settings
 from src.models.schemas import (
     ResearchRequest,
     EvidenceItem,
@@ -50,7 +50,7 @@ class Orchestrator:
         2. Fetch evidence (mocked in Slice 0)
         3. Analyst drafts initial thesis
         4. Critic reviews thesis
-        5. If not clean and interations remain: revise + re-critique
+        5. If not clean and iterations remain: revise + re-critique
         6. Save all artifacts and return result
         """
         run_id = uuid.uuid4().hex[:12]
@@ -59,8 +59,10 @@ class Orchestrator:
 
         trace: List[StepEvent] = []
         evidence: List[EvidenceItem] = []
-        analyst_output = AnalystOutput(thesis="", recommended_action="HOLD")
-        critic_output = CriticOutput()
+        # analyst_output = AnalystOutput(thesis="", recommended_action="HOLD")
+        # critic_output = CriticOutput()
+        analyst_output: Optional[AnalystOutput] = None
+        critic_output: Optional[CriticOutput] = None
         critique_history: List[CriticOutput] = []
         iterations_completed = 0
 
@@ -114,7 +116,7 @@ class Orchestrator:
             # ================================================================
             self._record_step(trace, "critic_review", StepStatus.START)
             critic_output = await self.critic.review(request, analyst_output, evidence)
-            critique_history.appned(critic_output)
+            critique_history.append(critic_output)
             write_json(
                 os.path.join(artifacts_dir, "critic_v1.json"),
                 critic_output.model_dump()
@@ -241,16 +243,24 @@ class Orchestrator:
         trace: List[StepEvent],
         step: str,
         status: StepStatus,
-        meta: Optional[dict] = None 
-    ) -> None:
+        meta = None 
+    ):
         """Record execution step with timing"""
+        meta = meta or {}
+
+        # On START: store monotonic start time
+        if status == StepStatus.START:
+            meta["_t0"] = time.perf_counter()
+
         # Calculate duration for END events
-        duration_ms = None,
+        duration_ms = None
         if status == StepStatus.END and trace:
             # Find matching START event
             for event in reversed(trace):
                 if event.step == step and event.status == StepStatus.START:
-                    duration_ms = (time.time() - event.timestamp.timestamp()) * 1000
+                    t0 = event.meta.get("_t0")
+                    if t0 is not None:
+                        duration_ms = (time.perf_counter() - t0) * 1000
                     break
 
         event = StepEvent(
@@ -270,7 +280,7 @@ class Orchestrator:
             duration_str = f"{duration_ms:.2f}ms" if duration_ms else ""
             logger.info(f"[{step}] END {duration_str} {event.meta}")
         else:
-            logger.error(f"[step] ERROR {event.meta}")
+            logger.error(f"[{step}] ERROR {event.meta}")
 
 
 # ============================================================================
@@ -289,7 +299,7 @@ if __name__ == "__main__":
             horizon="12 months",
             risk_profile="balanced",
             constraints=["no levelrage", "must consider regulatory risks"],
-            max_interations=2 # Allow up to 2 revision cycles
+            max_iterations=2 # Allow up to 2 revision cycles
         )
         
         result = await orch.run(request)

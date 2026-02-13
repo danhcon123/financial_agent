@@ -5,6 +5,7 @@ class SignalType(str, Enum):
     LONG = "LONG"
     SHORT = "SHORT"
     HOLD = "HOLD"
+    NO_TRADE = "NO_TRADE"
     
 class CritiqueSeverity(str, Enum):
     """Severity levels for critic issue"""
