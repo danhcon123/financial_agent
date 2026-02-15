@@ -7,4 +7,5 @@ venv/
 *.log
 .vscode/
 .idea/
-data/processed
+data/*.db
+data/processed/runs
