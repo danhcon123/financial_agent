@@ -20,6 +20,7 @@ from src.agents.analyst import AnalystAgent
 from src.agents.critic import CriticAgent
 from src.utils.logger import get_logger
 from src.utils.file_helpers import write_json, safe_write_json
+from src.tools.data_tools import fetch_and_store_price_data
 
 logger = get_logger(__name__)
 
@@ -207,36 +208,59 @@ class Orchestrator:
         
     def _fetch_evidence_stub(self, request: ResearchRequest) -> List[EvidenceItem]:
         """
-        Slice 0: Mock evidence generator.
+        Slice 1: Fetch REAL price data instead of stubs.
 
-        Will be replaced in Slice 1 with real data fetchers.
-        Returns placeholder evidence items to test workflow.
+        Will be replaced with tool-based fetching in Slice 2
         """
-        ticker = request.ticker or request.query
+        evidence= []
         
-        return [
-            EvidenceItem(
-                id="E1",
-                claim=f"Need comprehensive business overview and revenue model for {ticker}.",
-                source="stub_placeholder",
-                confidence=0.2,
-                timestamp=datetime.now()
-            ),
+        # If ticker provided, fetch real price data
+        if request.ticker:
+            logger.info(f"Fetching real price data for {request.ticker}")
+
+            result = fetch_and_store_price_data(request.ticker, days=90) 
+
+            if result["success"]:
+                evidence.append(EvidenceItem(
+                    id="E1",
+                    claim=result["evidence_claim"],
+                    source="yahoo_finance",
+                    timestamp=datetime.now(),
+                    confidence=0.9, # High confidence - real data
+                    raw=result
+                ))
+
+                logger.info(f"Successfully fetched price data for {request.ticker}")        
+            else:
+                logger.error(f"Failed to fetch price data: {result.get('error')}")
+                # Fallback to stub
+                evidence.append(EvidenceItem(
+                    id="E1",
+                    claim=f"Failed to fetch price data for {request.ticker}: {result.get('error')}",
+                    source="error",
+                    timestamp=datetime.now(),
+                    confidence=0.1
+                ))
+
+        # Add placeholder for other data types (will add in later slices)
+        evidence.extend([
             EvidenceItem(
                 id="E2",
-                claim=f"Require recent financial statements (revenue growth, margins, guidance) for {ticker}.",
+                claim=f"Need fundamental data (revenue, margins, guidance) for {request.ticker or request.query}.",
                 source="stub_placeholder",
-                confidence=0.2,
-                timestamp=datetime.now()
+                timestamp=datetime.now(),
+                confidence=0.2
             ),
             EvidenceItem(
                 id="E3",
-                claim=f"Need valuation context: peer comparisons, industry multiples, and assumptions for {ticker}.",
+                claim=f"Need valuation context (peer comparisons, multiples) for {request.ticker or request.query}.",
                 source="stub_placeholder",
-                confidence=0.2,
-                timestamp=datetime.now()
-            ),
-        ]
+                timestamp=datetime.now(),
+                confidence=0.2
+            )
+        ])
+
+        return evidence
     
     def _record_step(
         self,
