@@ -17,7 +17,8 @@ logger = get_logger(__name__)
 def parse_json_safely(
     text: str,
     fallback_key: str = "thesis",
-    default_value: Optional[Dict[str, Any]] = None
+    default_value: Optional[Dict[str, Any]] = None,
+    return_default_on_fail: bool = True
 ) -> Dict[str, Any]:
     """
     Extract JSON from LLM output with robust error handling.
@@ -26,6 +27,7 @@ def parse_json_safely(
         text: Raw LLM response text
         fallback_key: Key to use if wrapping raw text
         default_value: Return this if all parsing fails (prevent crashes)
+        return_default_on_fail: If False, return None on failure instead of default
 
     Returns:
         Parsed JSON dict or safe fallback
@@ -35,12 +37,12 @@ def parse_json_safely(
         return text
     if isinstance(text, list):
         logger.warning("Received list instead of dict, wrapping in default structure")
-        return default_value or {}
+        return default_value or {} if return_default_on_fail else None
 
     # Original string handling
     if not text or not text.strip() or not isinstance(text, str):
         logger.warning("Empty text provided to JSON parser")
-        return default_value or {}
+        return default_value or {} if return_default_on_fail else None
     
     text = text.strip()
 
@@ -61,10 +63,13 @@ def parse_json_safely(
     
     # Step 4: Fallback - wrap raw text
     logger.warning(f"Could not parse JSON, wrapping in fallback key '{fallback_key}'")
-    if default_value is not None:
-        return default_value
-    return {fallback_key: text[:500]} # Truncate to prevent huge objects
 
+    if return_default_on_fail:
+        if default_value is not None:
+            return default_value
+        return {fallback_key: text[:500]} # Truncate to prevent huge objects
+    else:
+        return None
 
 def _strip_code_fences(text: str) -> str:
     """Remove ```json...``` or ```json...``` fences"""

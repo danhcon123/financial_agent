@@ -1,7 +1,7 @@
 from langchain_ollama import ChatOllama
 from langchain_core.callbacks import StreamingStdOutCallbackHandler
 from langchain_core.messages import SystemMessage, HumanMessage
-from typing import List
+from typing import List, Dict, Any
 
 from src.config.settings import get_settings
 from src.config.prompts import CRITIC_SYSTEM_PROMPT
@@ -21,9 +21,9 @@ class CriticAgent:
         self.llm = ChatOllama(
             base_url=settings.ollama_base_url,
             model=settings.ollama_model,
-            temperature=0.7,
+            temperature=0.1, # Change from 0.5
+            format="json",  # Enforce JSON output
             callbacks=[StreamingStdOutCallbackHandler()],
-
         )
         
     async def review(
@@ -46,22 +46,46 @@ class CriticAgent:
             HumanMessage(content=user_prompt)
         ]
 
-        response = await self.llm.ainvoke(messages)
-        logger.debug(f"Critic raw response length: {len(response.content)} chars")
-        
-        return self._parse_critic_output(response.content)
+        # Use retry logic
+        try:
+            data = await self._invoke_with_retry(messages, max_retries=2)
+            return self._parse_critic_output(data)
+        except ValueError as e:
+            logger.error(f"Failed to generate valid critique: {e}")
+            # Return safe fallback
+            return CriticOutput(
+                assessment='WEAK',
+                critical_issues=[],
+                missing_evidence=["Critic failed to produce valid output"],
+                unsupported_claims=[],
+                contradictory_evidence=[],
+                recommended_revisions=["LLM output was invalid"]
+            )
     
     def _build_critique_prompt(
         self,
         request: ResearchRequest,
-        analyst: AnalystOutput,
+        analyst_output: AnalystOutput,
         evidence: List[EvidenceItem]
     ) -> str:
-        """Format critiques request with full context"""
-        evidence_ids = sorted([e.id for e in evidence])
-        analyst_json = analyst.model_dump_json(indent=2)
+        """Build prompt for critic evaluation"""
+        # Format evidence with full content
+        evidence_text = "\n".join(
+            f"- {e.id}: {e.claim} (source: {e.source}, confidence: {e.confidence:.2f})"
+            for e in evidence
+        )
 
-        return f"""Evaluate this investment thesis for logical soundness and evidence quality.
+        # Format analyst output as JSON
+        analyst_json = analyst_output.model_dump_json(indent=2)
+
+        # Format critique history if provided
+        critique_context = ""
+        if hasattr(self, '_critique_history') and self._critique_history:
+            critique_context = "\n\nPrevious Critiques (avoid repeating same issue):\n"
+            for i, prev_critique in enumerate(self._critique_history, 1):
+                critique_context += f"\nCritique {i}:\n{prev_critique.model_dump_json(indent=2)}\n"
+
+        prompt = f"""You are evaluating an investment thesis for logical soundness and evidence quality.
 
 Research Context:
 - Query: {request.query}
@@ -69,15 +93,15 @@ Research Context:
 - Horizon: {request.horizon}
 - Risk Profile: {request.risk_profile}
 
-Analyst Thesis (JSON):
+Available Evidence (WITH FULL CONTENT):
+{evidence_text}
+
+Analyst's Thesis (JSON):
 {analyst_json}
+{critique_context}
 
-Available Evidence IDs:
-{evidence_ids}
-
-Task:
+Your Task:
 Respond with ONLY valid JSON (no markdown, no preamble) using this structure:
-
 {{
     "assessment": "STRONG|MODERATE|WEAK",
     "critical_issues": [
@@ -91,14 +115,16 @@ Respond with ONLY valid JSON (no markdown, no preamble) using this structure:
 }}
 
 Evaluation Criteria:
-1. Are all bullets/claims backed by cited evidence (E1, E2, etc,)?
-2. Does the logic follow or are there causal gaps?
-3. Are risks adequately balanced against thesis?
-4. Any signs of confirmation bias or cherry-picking?
-5. What critical data is missing?
+1. Are all bullets/claims backed by cited evidence (E1, E2, etc.)?
+2. Does the thesis accurately reflect what the evidence actually says?
+3. Does the logic follow or are there causal gaps?
+4. Are risks adequately balanced against thesis?
+5. Any signs of confirmation bias or cherry-picking?
+6. What critical data is missing?
 
 Be specific, constructive, and prioritize  high-severity issues.
 """
+        return prompt
     
     def _parse_critic_output(self, content: str) -> CriticOutput:
         """Parse LLM response into structured critique"""
@@ -163,3 +189,52 @@ Be specific, constructive, and prioritize  high-severity issues.
             result.append(CriticIssue(issue=issue_text, severity=severity))
 
         return result[:10]
+    
+
+    async def _invoke_with_retry(
+        self,
+        messages: List,
+        max_retries: int = 2
+    ) -> Dict[str, Any]:
+        """Invoke LLM with retry on invalid JSON"""
+        last_content = None
+        
+        for attempt in range(max_retries + 1):
+            try:
+                response = await self.llm.ainvoke(messages)
+                content = response.content
+                
+                data = parse_json_safely(
+                    content,
+                    default_value=None,
+                    return_default_on_fail=False
+                )
+                
+                if data is not None:
+                    logger.debug(f"Successfully parsed JSON on attempt {attempt + 1}")
+                    return data
+                
+                last_content = content if isinstance(content, str) else str(content)
+                logger.warning(f"Attempt {attempt + 1}/{max_retries + 1}: Invalid JSON")
+                
+                if attempt < max_retries:
+                    messages.append(HumanMessage(content=(
+                        "Your previous response was NOT valid JSON.\n"
+                        "Return ONLY valid JSON with these exact keys:\n"
+                        "- assessment (STRONG/MODERATE/WEAK)\n"
+                        "- critical_issues (list of {issue, severity})\n"
+                        "- missing_evidence (list of strings)\n"
+                        "- unsupported_claims (list of strings)\n"
+                        "- contradictory_evidence (list of strings)\n"
+                        "- recommended_revisions (list of strings)\n\n"
+                        "No markdown, no preamble, no extra keys."
+                    )))
+            
+            except Exception as e:
+                logger.error(f"Error during LLM invocation: {e}")
+                last_content = str(e)
+        
+        raise ValueError(
+            f"LLM failed to return valid JSON after {max_retries + 1} attempts.\n"
+            f"Last output: {last_content[:300] if last_content else 'None'}"
+        )
