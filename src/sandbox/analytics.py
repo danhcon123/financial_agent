@@ -1,0 +1,142 @@
+"""
+Technical analysis functions for financial data
+Safe, pure functions - no file I/O, no network access
+"""
+
+import pandas as pd
+import numpy as np
+from typing import Dict, Any, List
+from datetime import datetime
+
+def compute_sma(prices: List[float], period: int = 20) -> List[float]:
+    """Compute Simple Moving Average"""
+    if len(prices) < period:
+        return [np.nan] * len(prices)
+    
+    df = pd.DataFrame({'price': prices})
+    sma = df['price'].rolling(window=period).mean()
+    return sma.tolist()
+
+def compute_ema(prices: List[float], period: int=20) -> List[float]:
+    """Compute Exponential Moving Average"""
+    if len(prices) < period:
+        return [np.nan] * len(prices)
+    
+    df = pd.DataFrame({'price': prices})
+    ema = df['price'].ewm(span=period, adjust=False).mean()
+    return ema.tolist()
+
+def compute_rsi(prices: List[float], period: int = 14) -> List[float]:
+    """Compute Relative Strength Index"""
+    if len(prices) < period:
+        return [np.nan] * len(prices)
+    
+    df = pd.DataFrame({'price': prices})
+    delta = df['price'].diff()
+    
+    gain = (delta.where(delta > 0,0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0,0)).rolling(window=period).mean()
+    
+    rs = gain/loss
+    rsi = 100 - (100/(1+rs))
+    return rsi.tolist()
+
+def compute_macd(
+    prices: List [float],
+    fast_period: int = 12,
+    slow_period: int = 26,
+    signal_period: int = 9
+) -> Dict[str, List[float]]:
+    """Compute MACD (Moving Average Convergence Divergence)"""
+    if len(prices) < slow_period:
+        nan_list = [np.nan] * len(prices)
+        return{
+            'macd': nan_list,
+            'signal': nan_list,
+            'histogram': nan_list
+        }
+    
+    df = pd.DataFrame({'price': prices})
+    
+    ema_fast = df['price'].ewm(span=fast_period, adjust=False).mean()
+    ema_slow = df['price'].ewm(span=slow_period, adjust=False).mean()
+
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
+    histogram = macd_line - signal_line
+
+    return {
+        'macd': macd_line.tolist(),
+        'signal': signal_line.tolist(),
+        'histogram': histogram.tolist()
+    }
+
+def compute_bollinger_bands(
+    prices: List[float],
+    period: int = 20,
+    num_std: float = 2.0
+) -> Dict[str, List[float]]:
+    """Compute Bollinger Bands"""
+    if len(prices) < period:
+        nan_list = [np.nan] * len(prices)
+        return {
+            'upper': nan_list,
+            'middle': nan_list,
+            'lower': nan_list
+        }
+    
+    df = pd.DataFrame({'price': prices})
+    
+    middle = df['price'].rolling(window=period).mean()
+    std = df['price'].rolling(window=period).std()
+
+    upper = middle + (std * num_std)
+    lower = middle - (std * num_std)
+
+    return{
+        'upper': upper.tolist(),
+        'middle': middle.tolist(),
+        'lower': lower.tolist()
+    }
+
+def analyze_trend(prices: List[float], sma_period: int = 20) -> Dict[str, Any]:
+    """
+    Analyze price trend relative to SMA.
+
+    Returns:
+        Dict with trend analysis including:
+        - current_price
+        - sma_value
+        - percent_from_sma
+        - trend (above/below)
+        - signal (bullish/bearish/neutral)
+    """
+    if len(prices) < sma_period + 1:
+        return {
+            'error': f'Insufficient data: need {sma_period + 1} prices, got {len(prices)}'
+        }
+    
+    current_price = prices[-1]
+    sma_values = compute_sma(prices, sma_period)
+    sma_value = sma_values[-1]
+
+    if np.isnan(sma_value):
+        return {'error': 'Could not compute SMA'}
+    
+    percent_from_sma = ((current_price - sma_value) / sma_value) * 100
+
+    # Determin signal
+    if percent_from_sma > 2:
+        signal = 'bullish'
+    elif percent_from_sma < -2:
+        signal = 'bearish'
+    else:
+        signal = 'neutral'
+
+    return {
+        'current_price': round(current_price, 2),
+        'sma_value': round(sma_value, 2),
+        'percent_from_sma': round(percent_from_sma, 2),
+        'trend': 'above' if current_price > sma_value else 'below',
+        'signal': signal
+    }
