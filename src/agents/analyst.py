@@ -75,10 +75,21 @@ class AnalystAgent:
             HumanMessage(content=user_prompt)
         ]
 
-        response = await self.llm.ainvoke(messages)
-        logger.debug(f"Analyst revision response length: {len(response.content)} chars")
-
-        return self._parse_analyst_output(response.content)
+        # Use retry logic (same as draft)
+        try:
+            data = await self._invoke_with_retry(messages, max_retries=2)
+            return self._parse_analyst_output(data)
+        except ValueError as e:
+            logger.error(f"Failed to generate valid revision: {e}")
+            # Return safe fallback
+            return AnalystOutput(
+                thesis=f"Failed to revise thesis: {str(e)[:200]}",
+                bullets=["LLM failed to produce valid revision"],
+                risks=["Unable to assess risks due to LLM failure"],
+                catalysts=[],
+                citations=[],
+                recommended_action=SignalType.NO_TRADE
+            )
     
     def _build_draft_prompt(
             self, 
@@ -203,6 +214,68 @@ Requirements:
 
         data = parse_json_safely(content, fallback_key="thesis", default_value=default)
 
+        REQUIRED_KEYS = {"thesis", "bullets", "risks", "catalysts", "citations", "recommended_actions"}
+
+        # Check if data is a dict
+        if not isinstance(data, dict):
+            logger.error(f"LLM returned non-dict: {type(data)}")
+            data = default
+        else:
+            actual_keys = set(data.keys())
+
+            # Check for completely wrong keys (hallucination detection)
+            if len(actual_keys & REQUIRED_KEYS) < 3: # Less than 3 correct keys = hallucination
+                logger.error(f"LLM hallucinated wrong schema. Got keys: {actual_keys}, expected: {REQUIRED_KEYS}")
+                data = default
+
+                # Map common mistakes to correct keys
+                key_mappings = {
+                    "revised_thesis": "thesis",
+                    "revised_bullets": "bullets",
+                    "revised_risks": "risks",
+                    "revised_catalysts": "catalysts",
+                    "key_risks": "risks",
+                    "evidence_gaps": None,
+                }
+
+                for wrong_key, correct_key in key_mappings.items():
+                    if wrong_key in data:
+                        if correct_key:
+                            logger.warning(f"Mapping '{wrong_key}' -> '{correct_key}'")
+                            data [correct_key] = data.pop(wrong_key)
+                        else:
+                            logger.warning(f"Ignoring invalid key '{wrong_key}'")
+                            data.pop(wrong_key)
+                
+                # Type validation
+                if "bullets" in data and not isinstance(data["bullets"], list):
+                    logger.error(f"'bullets' is not a list: {type(data['bullets'])}")
+                    data["bullets"] = default["bullets"]
+                elif "bullets" in data and not all(isinstance(x, str) for x in data["bullets"]):
+                    logger.error("'bullets' contains non-string items")
+                    data["bullets"] = [str(x) for x in data["bullets"] if x]
+                
+                if "risks" in data and not isinstance(data["risks"], list):
+                    logger.error(f"'risks' is not a list: {type(data['risks'])}")
+                    data["risks"] = default["risks"]
+                elif "risks" in data and not all(isinstance(x, str) for x in data["risks"]):
+                    logger.error("'risks' contains non-string items")
+                    data["risks"] = [str(x) for x in data["risks"] if x]
+                
+                if "catalysts" in data and not isinstance(data["catalysts"], list):
+                    logger.error(f"'catalysts' is not a list: {type(data['catalysts'])}")
+                    data["catalysts"] = default["catalysts"]
+                elif "catalysts" in data and not all(isinstance(x, str) for x in data["catalysts"]):
+                    logger.error("'catalysts' contains non-string items")
+                    data["catalysts"] = [str(x) for x in data["catalysts"] if x]
+                
+                if "citations" in data and not isinstance(data["citations"], list):
+                    logger.error(f"'citations' is not a list: {type(data['citations'])}")
+                    data["citations"] = default["citations"]
+                elif "citations" in data and not all(isinstance(x, str) for x in data["citations"]):
+                    logger.error("'citations' contains non-string items")
+                    data["citations"] = [str(x) for x in data["citations"] if x]
+
         # Extract and validate fields
         thesis = str(data.get("thesis", "")).strip() or default["thesis"]
         bullets = safe_list_extract(data, "bullets", max_items=8)
@@ -246,6 +319,7 @@ Requirements:
             ValueError: If all retries fail to produce valid JSON
         """
         last_content = None
+        REQUIRED_KEYS = {"thesis", "bullets", "risks", "catalysts", "citations", "recommended_action"}
 
         for attempt in range(max_retries + 1):
             try:
@@ -260,25 +334,38 @@ Requirements:
                 )
 
                 if data is not None:
-                    logger.debug(f"Successfully parsed JSON on attempt {attempt + 1}")
-                    return data
+                    if isinstance(data, dict):
+                        actual_keys = set(data.keys())
+
+                        # Check if schema is correct (at least 3 required keys present)
+                        if len(actual_keys & REQUIRED_KEYS) >= 3:
+                            logger.debug(f"Successfully parsed JSON with valid schema on attempt {attempt + 1}")
+                            return data
+                        else:
+                            logger.warning(f"Invalid schema. Got keys: {actual_keys}, expected: {REQUIRED_KEYS}")
+                            data = None
+
                 
                 # Parsing failed, prepare retry
                 last_content = content if isinstance(content, str) else str(content)
-                logger.warning(f"Attemp {attempt + 1}/{max_retries + 1}: Invalid JSON")
+                logger.warning(f"Attemp {attempt + 1}/{max_retries + 1}: Invalid JSON or schema")
 
                 if attempt < max_retries:
                     # Add correction message
                     messages.append(HumanMessage(content=(
-                        "Your previous response was NOT valid JSON.\n"
-                        "Return ONLY valid JSON with these exact keys:\n"
-                        "- thesis (string)\n"
-                        "- bullets (list of strings)\n"
-                        "- risks (list of strings)\n"
-                        "- catalysts (list of strings\n)"
-                        "- citations (list of evidence IDs)\n"
-                        "- recommended_action(LONG/SHORT/HOLD/NO_TRADE)\n\n"
-                        "No markdown, no preamble, no extra keys."
+                        "Your previous response was NOT valid JSON or had wrong keys.\n"
+                        "Return ONLY valid JSON with these EXACT keys (no other keys allowed):\n"
+                        "{\n"
+                        '  "thesis": "string",\n'
+                        '  "bullets": ["string1", "string2"],\n'
+                        '  "risks": ["string1", "string2"],\n'
+                        '  "catalysts": ["string1", "string2"],\n'
+                        '  "citations": ["E1", "E2"],\n'
+                        '  "recommended_action": "LONG or SHORT or HOLD"\n'
+                        "}\n\n"
+                        "Do NOT use keys like 'revised_thesis', 'key_risks', 'evidence_gaps'.\n"
+                        "Use ONLY the 6 keys shown above.\n"
+                        "No markdown, no preamble, no extra text."
                     )))
             except Exception as e:
                 logger.error(f"Error during LLM invocation: {e}")
