@@ -11,10 +11,9 @@ class Settings(BaseSettings):
 
     # Ollama config
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "deepseek-r1:8b"
-    #ollama_model: str = "qwen3-vl:4b"
-    ollama_temperature: float = 0.1, # 0.5
-    
+    # ollama_model: str = "deepseek-r1:8b"
+    ollama_model: str = "qwen3-vl:8b"
+    ollama_temperature: float = 0.0
     # System configuration
     log_level: str = "INFO"
     artifacts_root: str = "data/processed/runs"

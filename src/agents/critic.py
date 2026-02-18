@@ -21,7 +21,7 @@ class CriticAgent:
         self.llm = ChatOllama(
             base_url=settings.ollama_base_url,
             model=settings.ollama_model,
-            temperature=0.1, # Change from 0.5
+            temperature=settings.ollama_temperature,
             format="json",  # Enforce JSON output
             callbacks=[StreamingStdOutCallbackHandler()],
         )
