@@ -21,6 +21,8 @@ from src.agents.critic import CriticAgent
 from src.utils.logger import get_logger
 from src.utils.file_helpers import write_json, safe_write_json
 from src.tools.data_tools import fetch_and_store_price_data
+from src.tools.analysis_tools import compute_technical_indicators, generate_stock_chart
+import shutil
 
 logger = get_logger(__name__)
 
@@ -163,6 +165,18 @@ class Orchestrator:
             # ================================================================
             # FINALIZATION
             # ================================================================
+            
+            # Generate charts and save all artifacts
+            self._finalize_run(
+                run_id=run_id,
+                request=request,
+                evidence=evidence,
+                analyst_output=analyst_output,
+                critic_output=critic_output,
+                iterations=iterations_completed
+            )
+
+            # Save execution trace
             write_json(
                 os.path.join(artifacts_dir, "trace.json"),
                 [ev.model_dump() for ev in trace]
@@ -208,9 +222,7 @@ class Orchestrator:
         
     def _fetch_evidence_stub(self, request: ResearchRequest) -> List[EvidenceItem]:
         """
-        Slice 1: Fetch REAL price data instead of stubs.
-
-        Will be replaced with tool-based fetching in Slice 2
+        Slice 2: Fetch REAL price data + compute technical indicators.
         """
         evidence= []
         
@@ -230,7 +242,50 @@ class Orchestrator:
                     raw=result
                 ))
 
-                logger.info(f"Successfully fetched price data for {request.ticker}")        
+                logger.info(f"Successfully fetched price data for {request.ticker}")     
+
+                # Compute technical indicators (Slice 2)
+                logger.inf(f"Computing technical indicators for {request.ticker}")
+
+                indicators_result = compute_technical_indicators(
+                    ticker=request.ticker,
+                    indicators=["sma_20","rsi_14","trend"]
+                )   
+
+                if indicators_result["success"]:
+                    # Build indicator evidence claim
+                    ind = indicators_result["indicators"]
+
+                    parts = []
+                    if "sma_20" in ind and ind["sma_20"]["current"]:
+                        parts.append(f"SMA(20): ${ind['sma_20']['current']:.2f}")
+
+                    if "rsi_14" in ind and ind["rsi_14"]["current"]:
+                        rsi_val = ind["rsi_14"]["current"]
+                        rsi_signal = ind["rsi_14"]["current"]
+                        parts.append(f"RSI(14): {rsi_val:.1f} ({rsi_signal})")
+
+                    if "trend" in ind and "signal" in ind["trend"]:
+                        trend = ind["trend"]
+                        parts.append(
+                            f"Price ${trend['current_price']:.2f} is {trend['percent_from_sma']:.1f}%"
+                            f"{trend['trend']} SMA(20) - {trend['signal']} trend"
+                        )
+
+                    indicator_claim = f"{request.ticker} technical analysis: " + ", ".join(parts) + "."
+
+                    evidence.append(EvidenceItem(
+                        id="E2",
+                        claim=indicator_claim,
+                        source="technical_analysis",
+                        timestamp=datetime.now(),
+                        confidence=0.85,
+                        raw=indicators_result
+                    ))
+
+                    logger.info(f"Successfully computed indicators for {request.ticker}")
+                else:
+                    logger.warning(f"Failed to compute indicators: {indicators_result.get('error')}")
             else:
                 logger.error(f"Failed to fetch price data: {result.get('error')}")
                 # Fallback to stub
@@ -242,26 +297,81 @@ class Orchestrator:
                     confidence=0.1
                 ))
 
-        # Add placeholder for other data types (will add in later slices)
-        evidence.extend([
-            EvidenceItem(
-                id="E2",
-                claim=f"Need fundamental data (revenue, margins, guidance) for {request.ticker or request.query}.",
-                source="stub_placeholder",
-                timestamp=datetime.now(),
-                confidence=0.2
-            ),
+        # Add placeholder for fundamental data (Slice 3+)
+        evidence.append(
             EvidenceItem(
                 id="E3",
-                claim=f"Need valuation context (peer comparisons, multiples) for {request.ticker or request.query}.",
+                claim=f"Fundamental data (earnings, revenue, guidance) not yet implemented for {request.ticker or request.query}.",
                 source="stub_placeholder",
                 timestamp=datetime.now(),
                 confidence=0.2
             )
-        ])
-
+        )
         return evidence
     
+    def _finalize_run(
+        self,
+        run_id: str,
+        request: ResearchRequest,
+        evidence: List[EvidenceItem],
+        analyst_output: Optional[AnalystOutput],
+        critic_output: Optional[CriticOutput],
+        iterations: int
+    ) -> None:
+        """
+        Save all artifacts and generate final charts
+
+        Args:
+            run_id: Unique run identifier
+            request: Original research request
+            evidence: All evidence gathered
+            analyst_output: Final analyst thesis (if exists)
+            critic_output: Final critic evaluation (if exists)
+            iterations: Number of revision iterations completed
+        """
+        artifacts_dir = Path(self.artifacts_root) / run_id
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save core artifacts (if not already saved)
+        # Note: request.json and evidence.json are already saved in run()
+        # We're focusing on final versions here
+        if analyst_output:
+            final_version = iterations + 1
+            self._save_json(
+                artifacts_dir/ f"analyst_final.json",
+                analyst_output.model_dump()
+            )
+
+        if critic_output:
+            final_version = iterations + 1
+            self._save_json(
+                artifacts_dir / f"critic_final.json",
+                critic_output.model_dump()
+            )
+
+        # Generate charts (slice 2)
+        if request.ticker and analyst_output:
+            logger.info(f"Generating charts for {request.ticker}")
+
+            try:
+                # Generate price chart with SMA overlay
+                price_chart = generate_stock_chart(
+                    ticker=request.ticker,
+                    chart_type="price",
+                    include_indicators=["sma_20"]
+                )
+
+                if price_chart["success"]:
+                    # Copy chart to artifacts directory
+                    chart_filename = Path(price_char["chart_path"]).name
+                    dest_path =artifacts_dir / chart_filename
+                    shutil.copy(price_chart["chart_path"], dest_path)
+                    logger.info(f"Price chart saved: {dest_path}")
+                else:
+                    logger.warning(f"Price chart generation failed: {price_chart.get('error')}")
+
+                # Generate RSI chart
+
     def _record_step(
         self,
         trace: List[StepEvent],
