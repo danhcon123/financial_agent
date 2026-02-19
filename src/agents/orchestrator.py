@@ -3,6 +3,7 @@ import uuid
 import time
 from typing import List, Optional
 from datetime import datetime
+from pathlib import Path
 
 from langchain_core.runnables import RunnableConfig
 
@@ -363,7 +364,7 @@ class Orchestrator:
 
                 if price_chart["success"]:
                     # Copy chart to artifacts directory
-                    chart_filename = Path(price_char["chart_path"]).name
+                    chart_filename = Path(price_chart["chart_path"]).name
                     dest_path =artifacts_dir / chart_filename
                     shutil.copy(price_chart["chart_path"], dest_path)
                     logger.info(f"Price chart saved: {dest_path}")
@@ -371,7 +372,30 @@ class Orchestrator:
                     logger.warning(f"Price chart generation failed: {price_chart.get('error')}")
 
                 # Generate RSI chart
+                rsi_chart = generate_stock_chart(
+                    ticker=request.ticker,
+                    chart_type="rsi"
+                )
 
+                if rsi_chart["success"]:
+                    chart_filename = Path (rsi_chart["chart_path"]).name
+                    dest_path = artifacts_dir / chart_filename
+                    shutil.copy(rsi_chart["chart_path"], dest_path)
+                    logger.info(f"RSI chart saved: {dest_path}")
+                else:
+                    logger.warning(f"RSI chart generation failed: {rsi_chart.get('error')}")
+            
+            except Exception as e:
+                logger.error(f"Failed to generate charts: {e}")
+        
+        logger.info(f"Finalization complete. All artifacts in: {artifacts_dir}")
+
+    def _save_json(self, filepath: Path, data: Any) -> None:
+        """Helper to save JSON data"""
+        import json
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, default=str)
+            
     def _record_step(
         self,
         trace: List[StepEvent],
