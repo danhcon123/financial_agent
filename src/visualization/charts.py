@@ -76,7 +76,7 @@ class ChartGenerator:
         
         # Save
         if not filename:
-            filename = f"{ticker}_price_{dates[-1]}.png"
+            filename = f"{ticker}_price_{dates[-1].strftime('%Y-%m-%d')}.png"
         
         filepath = self.output_dir / filename
         plt.savefig(filepath, dpi=150, bbox_inches='tight')
@@ -118,7 +118,7 @@ class ChartGenerator:
         plt.tight_layout()
         
         if not filename:
-            filename = f"{ticker}_rsi_{dates[-1]}.png"
+            filename = f"{ticker}_rsi_{dates[-1].strftime('%Y-%m-%d')}.png"
         
         filepath = self.output_dir / filename
         plt.savefig(filepath, dpi=150, bbox_inches='tight')
@@ -126,3 +126,4 @@ class ChartGenerator:
         
         logger.info(f"RSI chart saved: {filepath}")
         return str(filepath)
+    

@@ -11,7 +11,8 @@ import numpy as np
 from src.data.storage import DuckDBStorage
 from src.sandbox.analytics import (
     compute_sma, compute_ema, compute_rsi,
-    compute_macd, compute_bollinger_bands, analyze_trend
+    compute_macd, compute_bollinger_bands, analyze_trend,
+    analyze_volume, compare_to_benchmark
 )
 from src.visualization.charts import ChartGenerator
 from src.utils.logger import get_logger
@@ -115,24 +116,89 @@ def compute_technical_indicators(
             
             elif indicator == 'macd':
                 macd_data = compute_macd(closes)
+                macd_current = macd_data['macd'][-1]
+                signal_current = macd_data['signal'][-1]
+                histogram_current = macd_data['histogram'][-1]
+
+                if histogram_current > 0 and macd_data['histogram'][-2] <= 0:
+                    macd_signal = 'bullish_crossover'
+                elif histogram_current < 0 and macd_data['histogram'][-2] >= 0:
+                    macd_signal = 'bearish_crossover'
+                elif histogram_current > 0:
+                    macd_signal = 'bullish'
+                else:
+                    macd_signal = 'bearish'
+                
                 result['indicators']['macd'] = {
-                    'macd_current': macd_data['macd'][-1],
-                    'signal_current': macd_data['signal'][-1],
-                    'histogram_current': macd_data['histogram'][-1]
+                    'macd': round(macd_current, 2) if not np.isnan(macd_current) else None,
+                    'signal': round(signal_current, 2) if not np.isnan(signal_current) else None,
+                    'histogram': round(histogram_current, 2) if not np.isnan(histogram_current) else None,
+                    'interpretation': macd_signal
                 }
 
             elif indicator == 'bbands':
                 bbands = compute_bollinger_bands(closes, period=20)
+                current_price = closes[-1]
+                upper = bbands['upper'][-1]
+                middle = bbands['middle'][-1]
+                lower = bbands['lower'][-1]
+                
+                if not np.isnan(upper) and not np.isnan(lower):
+                    bb_width = upper - lower
+                    price_position = (current_price - lower) / (upper - lower) * 100
+
+                    if price_position > 80:
+                        bb_signal = 'near_upper_band'
+                    elif price_position < 20:
+                        bb_signal = 'near_lower_band'
+                    else:
+                        bb_signal = 'middle_zone'
+                    
+                    # Check for squezze (narrow bands)
+                    avg_width = (upper - lower) / middle * 100
+                    if avg_width < 10:
+                        squeeze = True
+                    else:
+                        squeeze = False
+                else:
+                    bb_signal = 'insufficient_data'
+                    squeeze = False
+                    price_position = None
+
                 result['indicators']['bbands'] = {
-                    'upper': bbands['upper'][-1],
-                    'middle': bbands['middle'][-1],
-                    'lower': bbands['lower'][-1]
+                    'upper': round(upper, 2) if not np.isnan(upper) else None,
+                    'middle': round(middle, 2) if not np.isnan(middle) else None,
+                    'lower': round(lower, 2) if not np.isnan(lower) else None,
+                    'position': bb_signal,
+                    'squeeze': squeeze,
+                    'price_position_pct': round(price_position, 1) if price_position else None
                 }
 
             elif indicator == 'trend':
                 trend_analysis = analyze_trend(closes, sma_period=20)
                 result['indicators']['trend'] = trend_analysis
 
+        if len(rows) > 20:
+            volumes = [r.volume for r in rows]
+            volume_analysis = analyze_volume(volumes, period=20)
+
+            if 'error' not in volume_analysis:
+                result['volume_analysis'] = volume_analysis
+
+        if len(rows) > 2:
+            # Calculate ticker returns
+            ticker_start = rows[0].close
+            ticker_end = rows[-1].close
+            ticker_returns = ((ticker_end - ticker_start) / ticker_start) * 100
+            
+            benchmark_comparison = compare_to_benchmark(
+                ticker_returns=ticker_returns,
+                ticker=ticker,
+                period_days=len(rows)
+            )
+            
+            result['benchmark_comparison'] = benchmark_comparison
+    
         return result
     
     except Exception as e:
@@ -215,6 +281,8 @@ def generate_stock_chart(
                 "ticker": ticker,
                 "indicators": list(indicators_dict.keys())
             }
+        
+
     except Exception as e:
         logger.exception(f"Failed to generate chart for {ticker}")
         return {

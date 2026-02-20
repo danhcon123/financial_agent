@@ -1,7 +1,7 @@
 import os
 import uuid
 import time
-from typing import List, Optional
+from typing import List, Optional, Any
 from datetime import datetime
 from pathlib import Path
 
@@ -246,33 +246,54 @@ class Orchestrator:
                 logger.info(f"Successfully fetched price data for {request.ticker}")     
 
                 # Compute technical indicators (Slice 2)
-                logger.inf(f"Computing technical indicators for {request.ticker}")
+                logger.info(f"Computing technical indicators for {request.ticker}")
 
                 indicators_result = compute_technical_indicators(
                     ticker=request.ticker,
-                    indicators=["sma_20","rsi_14","trend"]
+                    indicators=["sma_20","rsi_14","macd", "bbands", "trend"]
                 )   
 
                 if indicators_result["success"]:
                     # Build indicator evidence claim
                     ind = indicators_result["indicators"]
-
+                    # Price & SMA
                     parts = []
                     if "sma_20" in ind and ind["sma_20"]["current"]:
                         parts.append(f"SMA(20): ${ind['sma_20']['current']:.2f}")
-
+                    # RSI
                     if "rsi_14" in ind and ind["rsi_14"]["current"]:
                         rsi_val = ind["rsi_14"]["current"]
-                        rsi_signal = ind["rsi_14"]["current"]
+                        rsi_signal = ind["rsi_14"]["signal"]
                         parts.append(f"RSI(14): {rsi_val:.1f} ({rsi_signal})")
-
+                    # MACD
+                    if "macd" in ind and ind["macd"]["histogram"] is not None:
+                            macd_hist = ind["macd"]["histogram"]
+                            macd_interp = ind["macd"]["interpretation"]
+                            parts.append(f"MACD histogram: {macd_hist:.2f} ({macd_interp})")
+                    # Bollinger Bands
+                    if "bbands" in ind and ind["bbands"]["position"]:
+                        bb_pos = ind["bbands"]["position"]
+                        bb_squeeze = "BB squeeze detected" if ind["bbands"]["squeeze"] else ""
+                        parts.append(f"Price {bb_pos.replace('_', ' ')} {bb_squeeze}".strip())
                     if "trend" in ind and "signal" in ind["trend"]:
                         trend = ind["trend"]
                         parts.append(
                             f"Price ${trend['current_price']:.2f} is {trend['percent_from_sma']:.1f}%"
                             f"{trend['trend']} SMA(20) - {trend['signal']} trend"
                         )
-
+                    #  Volume
+                    if "volume_analysis" in indicators_result:
+                        vol = indicators_result["volume_analysis"]
+                        parts.append(
+                            f"Volume: {vol['volume_ratio']}x average ({vol['signal'].replace('_', ' ')})"
+                        )
+                    if "benchmark_comparison" in indicators_result:
+                        bench = indicators_result["benchmark_comparison"]
+                        if "error" not in bench:
+                            parts.append(
+                                f"vs {bench['benchmark']}: {bench['relative_strength']:+.1f}% "
+                                f"({bench['signal'].replace('_', ' ')})"
+                            )
                     indicator_claim = f"{request.ticker} technical analysis: " + ", ".join(parts) + "."
 
                     evidence.append(EvidenceItem(

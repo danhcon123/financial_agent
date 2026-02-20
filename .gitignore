@@ -8,4 +8,5 @@ venv/
 .vscode/
 .idea/
 data/*.db
-data/processed/runs
+tests/data/processed
+data/processed
