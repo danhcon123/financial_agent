@@ -8,6 +8,9 @@ import numpy as np
 from typing import Dict, Any, List
 from datetime import datetime
 from src.utils.logger import get_logger
+from src.data.benchmark import BenchmarkSelector, BenchmarkInfo
+from src.data.storage import DuckDBStorage
+from src.data.fetchers.yahoo_finance import YahooFinanceFetcher
 
 logger = get_logger(__name__)
 
@@ -196,28 +199,16 @@ def analyze_volume(
 def get_appropriate_benchmark(ticker: str) -> str:
     """
     Select appropriate benchmark for comparison.
-    
+    Deprecated: use BenchmarkSelector.get_benchmark() for rich metadata.
+    Kept for backwards compatibility.
     Args:
         ticker: Stock ticker symbol
     
     Returns:
         Benchmark ETF ticker (QQQ, SPY, etc.)
     """
-    ticker = ticker.upper()
-    
-    # Tech/Growth stocks → Use QQQ (Nasdaq 100)
-    NASDAQ_STOCKS = [
-        'AAPL', 'MSFT', 'GOOGL', 'GOOG', 'META', 'AMZN', 'NVDA', 'TSLA',
-        'AMD', 'INTC', 'CRM', 'ORCL', 'ADBE', 'CSCO', 'AVGO', 'TXN',
-        'QCOM', 'NFLX', 'PYPL', 'COST', 'SBUX', 'AMAT', 'MU', 'LRCX'
-    ]
-    if ticker in NASDAQ_STOCKS:
-        return 'QQQ'
-    
-    # TODO (Slice 3): Add yfinance sector lookup for automatic detection
-    # For now, default to S&P 500 for all other stocks
-    return 'SPY'
-
+    info = BenchmarkSelector().get_benchmark(ticker)
+    return info.etf_ticker
 
 def compare_to_benchmark(
     ticker_returns: float,
@@ -226,7 +217,6 @@ def compare_to_benchmark(
 ) -> Dict[str, Any]:
     """
     Compare stock performance to appropriate benchmark.
-    
     Automatically selects QQQ (Nasdaq) or SPY (S&P 500) based on ticker.
     
     Args:
@@ -237,11 +227,10 @@ def compare_to_benchmark(
     Returns:
         Dict with comparative analysis
     """
-    from src.data.storage import DuckDBStorage
-    from src.data.fetchers.yahoo_finance import YahooFinanceFetcher
     
-    # ✅ Select appropriate benchmark
-    benchmark_ticker = get_appropriate_benchmark(ticker)
+    # Select appropriate benchmark
+    benchmark_info = BenchmarkSelector.get_benchmark(ticker)
+    benchmark_ticker = benchmark_info.etf_ticker
     
     try:
         storage = DuckDBStorage()
@@ -299,7 +288,12 @@ def compare_to_benchmark(
             'benchmark_returns': round(bench_returns, 2),
             'relative_strength': round(relative_strength, 2),
             'signal': signal,
-            'interpretation': interpretation
+            'interpretation': interpretation,
+            'sector': benchmark_info.sector,
+            'industry': benchmark_info.industry,
+            'sector_pe_avg': benchmark_info.sector_pe_avg,
+            'sector_pb_avg': benchmark_info.sector_pb_avg,
+            'benmark_note': benchmark_info.notesm
         }
     
     except Exception as e:
@@ -307,5 +301,6 @@ def compare_to_benchmark(
         return {
             'error': str(e),
             'ticker_returns': round(ticker_returns, 2),
-            'benchmark': benchmark_ticker
+            'benchmark': benchmark_ticker,
+            'sector': benchmark_info.sector if 'benchmark_info' in locals() else 'Unknown',
         }
