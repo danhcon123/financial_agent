@@ -9,6 +9,7 @@ from src.models.schemas import ResearchRequest, EvidenceItem, AnalystOutput, Cri
 from src.models.enums import SignalType
 from src.utils.logger import get_logger
 from src.utils.json_parser import parse_json_safely, safe_list_extract
+import json
 
 logger = get_logger(__name__)
 
@@ -17,13 +18,28 @@ class AnalystAgent:
 
     def __init__(self):
         settings = get_settings()
-        self.llm = ChatOllama(
-            base_url=settings.ollama_base_url,
-            model=settings.ollama_model,
-            temperature=settings.ollama_temperature,
-            format="json", # Enforce JSON output
-            callbacks=[StreamingStdOutCallbackHandler()],
-        )
+
+        if settings.ollama_mode == "cloud":
+            self.llm = ChatOllama(
+                base_url=settings.ollama_cloud_base_url,
+                model=settings.ollama_cloud_model,
+                tempurature=settings.ollama_temperature,
+                format="json",
+                client_kwargs={
+                    "headers": {
+                        "Authorization": f"Bearer {settings.ollama_api_key}" 
+                    }
+                },
+                callbacks=[StreamingStdOutCallbackHandler()]
+            )
+        else:
+            self.llm = ChatOllama(
+                base_url=settings.ollama_base_url,
+                model=settings.ollama_model,
+                temperature=settings.ollama_temperature,
+                format="json", # Enforce JSON output
+                callbacks=[StreamingStdOutCallbackHandler()],
+            )
 
     async def draft(
         self,
@@ -200,7 +216,7 @@ Requirements:
             )
         return "\n".join(lines)
     
-    def _parse_analyst_output(self, content: str) -> AnalystOutput:
+    def _parse_analyst_output(self, data: Dict[str, Any]) -> AnalystOutput:
         """Parse LLM response into structured output with validation"""
         # Default fallback to prevent crashes
         default = {
@@ -212,9 +228,9 @@ Requirements:
             "recommended_action": "HOLD"
         }
 
-        data = parse_json_safely(content, fallback_key="thesis", default_value=default)
+        # data = parse_json_safely(content, fallback_key="thesis", default_value=default)
 
-        REQUIRED_KEYS = {"thesis", "bullets", "risks", "catalysts", "citations", "recommended_actions"}
+        REQUIRED_KEYS = {"thesis", "bullets", "risks", "catalysts", "citations", "recommended_action"}
 
         # Check if data is a dict
         if not isinstance(data, dict):
@@ -226,7 +242,7 @@ Requirements:
             # Check for completely wrong keys (hallucination detection)
             if len(actual_keys & REQUIRED_KEYS) < 3: # Less than 3 correct keys = hallucination
                 logger.error(f"LLM hallucinated wrong schema. Got keys: {actual_keys}, expected: {REQUIRED_KEYS}")
-                data = default
+                # data = default
 
                 # Map common mistakes to correct keys
                 key_mappings = {
@@ -238,15 +254,22 @@ Requirements:
                     "evidence_gaps": None,
                 }
 
+                remapped = dict(data)
                 for wrong_key, correct_key in key_mappings.items():
-                    if wrong_key in data:
+                    if wrong_key in remapped:
                         if correct_key:
                             logger.warning(f"Mapping '{wrong_key}' -> '{correct_key}'")
-                            data [correct_key] = data.pop(wrong_key)
+                            remapped[correct_key] = remapped.pop(wrong_key)
                         else:
                             logger.warning(f"Ignoring invalid key '{wrong_key}'")
-                            data.pop(wrong_key)
+                            remapped.pop(wrong_key)
                 
+                data = remapped
+                actual_keys = set(data.keys())
+
+                if len(actual_keys & REQUIRED_KEYS) < 3:
+                    logger.error("Still invalid after remapping; using default")
+                    data = default
                 # Type validation
                 if "bullets" in data and not isinstance(data["bullets"], list):
                     logger.error(f"'bullets' is not a list: {type(data['bullets'])}")
@@ -325,6 +348,10 @@ Requirements:
             try:
                 response = await self.llm.ainvoke(messages)
                 content = response.content
+                if isinstance(content, dict):
+                    content = json.dumps(content)
+                elif not isinstance(content, str):
+                    content = str(content)
 
                 # Try parsing with no fallback
                 data = parse_json_safely(

@@ -9,6 +9,7 @@ from src.models.schemas import ResearchRequest, EvidenceItem, AnalystOutput, Cri
 from src.models.enums import CritiqueSeverity
 from src.utils.logger import get_logger
 from src.utils.json_parser import parse_json_safely, safe_list_extract
+import json
 
 logger = get_logger(__name__)
 
@@ -18,13 +19,27 @@ class CriticAgent:
     def __init__(self):
         settings = get_settings()
         # Fresh LLM instance for stateless critique
-        self.llm = ChatOllama(
-            base_url=settings.ollama_base_url,
-            model=settings.ollama_model,
-            temperature=settings.ollama_temperature,
-            format="json",  # Enforce JSON output
-            callbacks=[StreamingStdOutCallbackHandler()],
-        )
+        if settings.ollama_mode == "cloud":
+            self.llm = ChatOllama(
+                base_url=settings.ollama_cloud_base_url,
+                model=settings.ollama_cloud_model,
+                tempurature=settings.ollama_temperature,
+                format="json",
+                client_kwargs={
+                    "headers": {
+                        "Authorization": f"Bearer {settings.ollama_api_key}" 
+                    }
+                },
+                callbacks=[StreamingStdOutCallbackHandler()]
+            )
+        else:
+            self.llm = ChatOllama(
+                base_url=settings.ollama_base_url,
+                model=settings.ollama_model,
+                temperature=settings.ollama_temperature,
+                format="json", # Enforce JSON output
+                callbacks=[StreamingStdOutCallbackHandler()],
+            )
         
     async def review(
             self,
@@ -126,7 +141,7 @@ Be specific, constructive, and prioritize  high-severity issues.
 """
         return prompt
     
-    def _parse_critic_output(self, content: str) -> CriticOutput:
+    def _parse_critic_output(self, data: Dict[str, Any]) -> CriticOutput:
         """Parse LLM response into structured critique"""
         # Default fallback
         default = {
@@ -138,7 +153,10 @@ Be specific, constructive, and prioritize  high-severity issues.
             "recommended_revisions": ["Add more specific evidence citations"]
         }
 
-        data = parse_json_safely(content, default_value=default)
+        # data = parse_json_safely(content, default_value=default)
+        if not isinstance(data, dict):
+            logger.error(f"LLM returned non-dict: {type(data)}")
+            data = default
 
         # Extract assessment
         assessment = str(data.get("assessment", "MODERATE")).upper()
@@ -164,7 +182,7 @@ Be specific, constructive, and prioritize  high-severity issues.
             recommended_revisions=recommended_revisions or default["recommended_revisions"]
         )
     
-    def _parse_critical_issue(self, raw_issues: any) -> List[CriticIssue]:
+    def _parse_critical_issue(self, raw_issues: Any) -> List[CriticIssue]:
         """Parse and validate critique issues list"""
         if not isinstance(raw_issues, list):
             return []
@@ -198,11 +216,16 @@ Be specific, constructive, and prioritize  high-severity issues.
     ) -> Dict[str, Any]:
         """Invoke LLM with retry on invalid JSON"""
         last_content = None
-        
+    
         for attempt in range(max_retries + 1):
             try:
                 response = await self.llm.ainvoke(messages)
                 content = response.content
+                
+                if isinstance(content, dict):
+                    content = json.dumps(content)
+                elif not isinstance(content, str):
+                    content = str(content)
                 
                 data = parse_json_safely(
                     content,
