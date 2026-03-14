@@ -26,7 +26,14 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     artifacts_root: str = "data/processed/runs"
 
+    # Alpha Vantage API
+    alpha_vantage_api_key: Optional[str] = None
+
+    # GDELT (no key needed)
+    gdelt_base_url: str = "https://api.gdeltproject.org/api/v2"
+
+    
 @lru_cache()
 def get_settings() -> Settings:
     """Cached settings instance"""
-    return Settings()
+    return Settings() 
