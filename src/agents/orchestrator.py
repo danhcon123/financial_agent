@@ -23,6 +23,7 @@ from src.utils.logger import get_logger
 from src.utils.file_helpers import write_json, safe_write_json
 from src.tools.data_tools import fetch_and_store_price_data
 from src.tools.analysis_tools import compute_technical_indicators, generate_stock_chart
+from src.tools.news_tools import fetch_alpha_vantage_news, fetch_gdelt_news
 import shutil
 
 logger = get_logger(__name__)
@@ -223,7 +224,8 @@ class Orchestrator:
         
     def _fetch_evidence_stub(self, request: ResearchRequest) -> List[EvidenceItem]:
         """
-        Slice 2: Fetch REAL price data + compute technical indicators.
+        Fetch REAL price data + compute technical indicators.
+        Fetch news sentiment from Alpha Vantage and GDELT.
         """
         evidence= []
         
@@ -319,16 +321,78 @@ class Orchestrator:
                     confidence=0.1
                 ))
 
-        # Add placeholder for fundamental data (Slice 3+)
-        evidence.append(
-            EvidenceItem(
-                id="E3",
-                claim=f"Fundamental data (earnings, revenue, guidance) not yet implemented for {request.ticker or request.query}.",
-                source="stub_placeholder",
-                timestamp=datetime.now(),
-                confidence=0.2
+        # ================================================================
+        # E3: Alpha Vantage News + Sentiment
+        # ================================================================
+        if request.ticker:
+            logger.info(f"Fetching Alpha Vantage news for {request.ticker}")
+            av_result = fetch_alpha_vantage_news(
+                ticker=request.ticker,
+                limit = 10
             )
-        )
+
+            if av_result["success"]:
+                # Confidence based on article count - more articles = more reliable signal
+                article_count = av_result.get("article_count", 0)
+                confidence = min(0.5 + (article_count/ 100), 0.9)
+
+                evidence.append(EvidenceItem(
+                    id="E3",
+                    claim=av_result["evidence_claim"],
+                    source="alpha_vantage_news",
+                    timestamp=datetime.now(),
+                    confidence=round(confidence, 2),
+                    raw=av_result
+                ))
+                logger.info(f"Alpha Vantage news added as E3 ({article_count} articles)")
+            else:
+                logger.warning(f"Alpha Vantage news failed: {av_result.get('error')}")
+                # Add a soft failure evidence item so analyst know data is missing
+                evidence.append(EvidenceItem(
+                    id="E3",
+                    claim=f"News sentiment data unavailable for {request.ticker}: {av_result.get('error', 'unknown error')}",
+                    source="alpha_vantage_news",
+                    timestamp=datetime.now(),
+                    confidence=0.1,
+                    raw=av_result
+                ))
+            
+            # ================================================================
+            # E4: GDELT Global Coverage Signal
+            # ================================================================
+            logger.info(f"Fetching GDELT coverage signal for {request.ticker}")
+            gdelt_result = fetch_gdelt_news(
+                ticker=request.ticker,
+                limit=15 # fetch more for better coverage count accuracy
+            )
+
+            if gdelt_result["success"]:
+                coverage = gdelt_result.get("coverage", {})
+                article_count = coverage.get("article_count", 0)
+
+                # Higher coverage = more confidence the signal is meaningful
+                confidence = min(0.4 + (article_count / 200), 0.75)
+                
+                evidence.append(EvidenceItem(
+                    id="E4",
+                    claim=gdelt_result["evidence_claim"],
+                    source="gdelt_coverage",
+                    timestamp=datetime.now(),
+                    confidence=round(confidence, 2),
+                    raw=gdelt_result
+                ))
+                logger.info(f"GDELT coverage added as E4 ({article_count} articles)")
+            else:
+                logger.warning(f"GDELT coverage fetch failed: {gdelt_result.get('error')}")
+                evidence.append(EvidenceItem(
+                    id="E4",
+                    claim=f"Global news coverage data unavailable for {request.ticker}: {gdelt_result.get('error', 'unknown error')}",
+                    source="gdelt_coverage",
+                    timestamp=datetime.now(),
+                    confidence=0.1,
+                    raw=gdelt_result
+                ))
+
         return evidence
     
     def _finalize_run(

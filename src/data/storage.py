@@ -63,6 +63,7 @@ class DuckDBStorage:
                 published_at TIMESTAMP,
                 sentiment_score DOUBLE,
                 sentiment_label VARCHAR,
+                relevance_score DOUBLE,
                 topics          VARCHAR,
                 fetched_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 summary VARCHAR
@@ -255,7 +256,8 @@ class DuckDBStorage:
                 a.get("sentiment_score"),
                 a.get("sentiment_label"),
                 a.get("topics"), # stored as JSON string
-                a.get("summary")
+                a.get("summary"),
+                a.get("relevance_score")
             )
             for a in articles
         ]
@@ -263,8 +265,8 @@ class DuckDBStorage:
         self.conn.executemany("""
             INSERT INTO news_articles (
                 id, ticker, title, url, source, published_at,
-                sentiment_score, sentiment_label, topics, summary)
-            VALUES(?,?,?,?,?,?,?,?,?,?)
+                sentiment_score, sentiment_label, topics, summary, relevance_score)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT DO NOTHING
         """, data)
 
@@ -288,7 +290,7 @@ class DuckDBStorage:
             List of news article dictionaries, sorted by published_at descending
         """
         result = self.conn.execute("""
-            SELECT id, title, url, source, published_at, sentiment_score, sentiment_label, topics, summary
+            SELECT id, title, url, source, published_at, sentiment_score, sentiment_label, topics, summary, relevance_score
             FROM news_articles
             WHERE ticker = ?
             AND fetched_at >= NOW() - INTERVAL (? || ' hours')::INTERVAL
@@ -307,6 +309,7 @@ class DuckDBStorage:
                 "sentiment_label": row[6],
                 "topics": row[7], # JSON string
                 "summary": row[8],
+                "relevance_score": row[9]
             }
             for row in result
         ]

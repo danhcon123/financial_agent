@@ -5,8 +5,10 @@ Sources: Alpha Vantage (news + sentiment), GDELT (global news tone)
 import hashlib
 import json
 import requests
+import time
 from typing import Optional
 from datetime import datetime
+
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
@@ -89,7 +91,7 @@ def fetch_alpha_vantage_news(ticker: str, limit: int = 10) -> dict:
         params = {
             "function": "NEWS_SENTIMENT",
             "tickers": ticker,
-            "limit": min(limit, 500),
+            "limit": min(limit, 50),
             "apikey": settings.alpha_vantage_api_key
         }
 
@@ -128,10 +130,17 @@ def fetch_alpha_vantage_news(ticker: str, limit: int = 10) -> dict:
             # Find this ticker's specific sentiment score in the article
             # (each article can mention multiple tickers)
             ticker_sentiment_score = 0.0
+            ticker_relevance = 0.0
+
             for ts in item.get("ticker_sentiment", []):
                 if ts.get("ticker") == ticker:
-                    ticker_sentiment_score = float(ts.get("sentiment_score", 0.0))
+                    ticker_relevance = float(ts.get("relevance_score", 0.0))
+                    ticker_sentiment_score = float(ts.get("ticker_sentiment_score", 0.0))
                     break
+
+            # Skip articles where this ticker is barely mentioned
+            if ticker_relevance < 0.5:
+                continue
             
             # Generate stable unique ID from ticker + url
             # This means:
@@ -163,6 +172,7 @@ def fetch_alpha_vantage_news(ticker: str, limit: int = 10) -> dict:
                 "sentiment_score": ticker_sentiment_score,
                 "sentiment_label": _parse_sentiment_label(ticker_sentiment_score),
                 "topics": topics,
+                "relevance_score":  ticker_relevance,
             })
 
         # ------------------------------------------------------------------
@@ -259,8 +269,24 @@ def fetch_gdelt_news(
         }
 
         logger.info(f"Calling GDELT API for news on {query_name} (ticker: {ticker})")
-        response = requests.get(base_url, params=params, timeout=10)
-        response.raise_for_status()
+        for attempt in range(3): # retry up to 3 times on rate limit
+            response = requests.get(base_url, params=params, timeout=15)
+            if response.status_code == 429:
+                wait = 10 * (attempt + 1) # 10s, 20s, 30s
+                logger.warning(f"GDELT rate limited, retrying in {wait}s...")
+                time.sleep(wait)
+                continue
+            response.raise_for_status()
+            break
+        else:
+            # All 3 attempts were limited
+            logger.error("GDELT API rate limit exceeded after 3 attempts")
+            storage.close()
+            return {
+                "success": False,
+                "ticker": ticker,
+                "error": "GDELT API rate limit exceeded"
+            }
         data = response.json()
         raw_articles = data.get("articles", [])
 
@@ -393,7 +419,7 @@ def _build_evidence_claim(ticker: str, articles: list) -> str:
     return (
         f"{ticker} news sentiment ({sentiment['article_count']} articles): "
         f"{sentiment['label']} (avg score: {sentiment['score']}). "
-        f"Top stories: {headlines_str}."
+        f"Top stories: {headlines_str}. "
         f"Reference URLs:\n - {urls_str}"
     )
 
