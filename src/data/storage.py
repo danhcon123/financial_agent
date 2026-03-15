@@ -1,10 +1,12 @@
 """
 DuckDB storage layer for market data
 """
+import hashlib
+import json
 import duckdb
 from typing import List, Optional
 from pathlib import Path
-from datetime import date
+from datetime import date, datetime
 
 from src.models.market_data import OHLCVRow
 from src.utils.logger import get_logger
@@ -35,7 +37,7 @@ class DuckDBStorage:
         logger.info(f"Connected to DuckDB: {db_path}")
 
     def _create_schema(self) -> None:
-        """Create tables if they don't exist"""
+        """Create tables if they don't exist to store price data, news and volume coverage (gdelt_coverage)"""
         # Price data table
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS prices(
@@ -63,7 +65,19 @@ class DuckDBStorage:
                 sentiment_label VARCHAR,
                 topics          VARCHAR,
                 fetched_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                summary VARCHAR,         
+                summary VARCHAR
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS gdelt_coverage(
+                id VARCHAR PRIMARY KEY,         -- hash of ticker + fetched_at date
+                ticker VARCHAR NOT NULL,
+                article_count INTEGER,
+                top_sources VARCHAR,            -- JSON list of source domains
+                top_countries VARCHAR,          -- JSON list of countries
+                coverage_label VARCHAR,
+                top_article_urls VARCHAR,
+                fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         # Create index for faster queries
@@ -75,7 +89,10 @@ class DuckDBStorage:
             CREATE INDEX IF NOT EXISTS idx_news_ticker_fetched
             ON news_articles(ticker, fetched_at DESC)
         """)
-
+        self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_gdelt_ticker_fetched
+            ON gdelt_coverage(ticker, fetched_at DESC)
+        """)
         logger.debug("Schema created/veried")
 
     def store(self, rows: List[OHLCVRow], replace: bool = True) -> int:
@@ -205,7 +222,7 @@ class DuckDBStorage:
             SELECT COUNT(*) FROM news_articles
             WHERE ticker = ?
             AND fetched_at >= NOW() - INTERVAL (? || ' hours')::INTERVAL
-        """, [ticker.upper(), max_age_hours]).fetchone()
+        """, [ticker.upper(), str(max_age_hours)]).fetchone()
 
         count = result[0] if result else 0
         logger.debug(f"Fresh news check for {ticker}: {count} articles found")
@@ -295,3 +312,85 @@ class DuckDBStorage:
         ]
         logger.debug(f"Fetched {len(articles)} cached news for {ticker}")
         return articles
+    
+    def has_fresh_coverage(self, ticker: str, max_age_hours: int = 12) -> bool:
+        """
+        Check if recent GDELT coverage data exists for this ticker.
+        Prevent unnecessary GDELT fetches.
+
+        Args:
+            ticker: Stock ticker symbol
+            max_age_hours: Maximum age of coverage in hours to consider "fresh"
+        Returns:
+            True if fresh coverage exists, False otherwise
+        """
+        result = self.conn.execute("""
+            SELECT COUNT(*) FROM gdelt_coverage
+            WHERE ticker = ?
+            AND fetched_at >= NOW() - INTERVAL (? || ' hours')::INTERVAL
+        """, [ticker.upper(), str(max_age_hours)]).fetchone()
+
+        count = result[0] if result else 0
+        logger.debug(f"Fresh GDELT coverage check for {ticker}: {count} records found")
+        return count > 0
+    
+    def store_coverage(self, ticker: str, coverage: dict) -> None:
+        """
+        Store GDELT coverage summary data in the database.
+
+        Args:
+            ticker: Stock ticker symbol
+            coverage: Dictionary with keys:
+                article_count, top_sources, top_countries, coverage_label
+        """
+        coverage_id = hashlib.md5(
+            f"{ticker}{datetime.now().date()}".encode()
+        ).hexdigest()[:16]
+
+        self.conn.execute("""
+            INSERT INTO gdelt_coverage (
+                id, ticker, article_count, 
+                top_sources, top_countries, coverage_label, top_article_urls)
+            VALUES(?,?,?,?,?,?,?)
+            ON CONFLICT DO NOTHING
+        """, [
+            coverage_id,
+            ticker.upper(),
+            coverage.get("article_count"),
+            json.dumps(coverage.get("top_sources", [])),
+            json.dumps(coverage.get("top_countries", [])),
+            coverage.get("coverage_label", "Unknown"),
+            json.dumps(coverage.get("top_article_urls", []))
+        ])
+        logger.info(f"Stored GDELT coverage for {ticker}")
+
+    def fetch_coverage(self, ticker: str, max_age_hours: int = 12) -> Optional[dict]:
+        """
+        Fetch latest GDELT coverage summary for a ticker.
+
+        Args:
+            ticker: Stock ticker symbol
+            max_age_hours: Maximum age of coverage in hours to fetch
+        Returns:
+            Coverage dictionary or None if not found
+        """
+        result = self.conn.execute("""
+            SELECT article_count, top_sources, top_countries, coverage_label, top_article_urls, fetched_at
+            FROM gdelt_coverage
+            WHERE ticker = ?
+            AND fetched_at >= NOW() - INTERVAL (? || ' hours')::INTERVAL
+            ORDER BY fetched_at DESC
+            LIMIT 1
+        """, [ticker.upper(), str(max_age_hours)]).fetchone()
+        
+        if not result:
+            return None
+        
+        return {
+            "article_count": result[0],
+            "top_sources": json.loads(result[1]),
+            "top_countries": json.loads(result[2]),
+            "coverage_label": result[3],
+            "top_article_urls":  json.loads(result[4]),
+            "fetched_at": str(result[5])
+        }

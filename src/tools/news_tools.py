@@ -4,9 +4,8 @@ Sources: Alpha Vantage (news + sentiment), GDELT (global news tone)
 """
 import hashlib
 import json
-from pydoc import doc
 import requests
-from typing import List, Dict, Any, Optional
+from typing import Optional
 from datetime import datetime
 
 from langchain_core.tools import StructuredTool
@@ -208,7 +207,8 @@ def fetch_gdelt_news(
     limit: int = 10
 ) -> dict:
     """
-    Fetch global news coverage for a company from GDELT.
+    Fetch global news coverage volume for a company from GDELT.
+    Used as a coverage intensity signal, not article content.
     No API key required. Uses cache-first strategy.
 
     GDELT complements Alpha Vantage by providing:
@@ -231,35 +231,28 @@ def fetch_gdelt_news(
     # ------------------------------------------------------------------
     storage = DuckDBStorage()
 
-    if storage.has_fresh_news(ticker, max_age_hours=24):
+    if storage.has_fresh_coverage(ticker, max_age_hours=12):
         logger.info(f"Cache hit: returning stored news for {ticker}")
-        articles = storage.fetch_news(ticker, max_age_hours=24, limit=limit)
-
-        # Filter to GDELT source only
-        gdelt_articles = [a for a in articles if a.get("source") == "gdelt"]
-
-        if gdelt_articles:
-            storage.close()
-            return {
-                "success": True,
-                "ticker": ticker,
-                "source": "cache",
-                "articles": gdelt_articles,
-                "article_count": len(gdelt_articles),
-                "aggregate_sentiment": _compute_gdelt_tone(gdelt_articles),
-                "evidence_claim": _build_gdelt_evidence_claim(ticker, query_name, gdelt_articles)
-            }
+        coverage  = storage.fetch_coverage(ticker, max_age_hours=12)
+        storage.close()
+        return {
+            "success": True,
+            "ticker": ticker,
+            "source": "cache",
+            "coverage": coverage,
+            "evidence_claim": _build_gdelt_evidence_claim(ticker, query_name, coverage)
+        }
         
     # ------------------------------------------------------------------
     # STEP 2: Call GDELT API
     # ------------------------------------------------------------------
     try:
         settings = get_settings()
-        base_url = f{settings.gdelt_base_url}/v2/doc/doc"
+        base_url = f"{settings.gdelt_base_url}/doc/doc"
 
         params = {
             "query": f'"{query_name}" sourcelang:english',
-            "mode": "artList",
+            "mode": "artlist",
             "maxrecords": min(limit, 250),
             "format": "json",
             "timespan": "24h"
@@ -269,67 +262,56 @@ def fetch_gdelt_news(
         response = requests.get(base_url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
+        raw_articles = data.get("articles", [])
 
         # ------------------------------------------------------------------
         # STEP 3: Check for API errors
         # ------------------------------------------------------------------
-        raw_articles = data.get("articles", [])
-
-        if not raw_articles:
-            logger.warning(f"No GDELT articles found for '{query_name}'")
-            storage.close()
-            return {
-                "success": True,
-                "ticker": ticker,
-                "source": "gdelt",
-                "articles": [],
-                "article_count": 0,
-                "tone_summary": {"label": "Neutral", "article_count": 0},
-                "evidence_claim": f"No GDELT articles found for {query_name} in the last 24 hours."
-            }
-        
-        articles = []
+        # Extract top domains
+        domains = []
+        countries = []
         for item in raw_articles:
-            # Parse GDELT date format: "20240315T143000Z"
-            seen_date_str = item.get("seendate", "")
-            try:
-                published_at = datetime.strptime(seen_date_str, "%Y%m%dT%H%M%SZ")
-            except ValueError:
-                published_at = datetime.now()  # fallback to now if parsing fails
-            
-            # Generate unique ID
-            article_id = hashlib.md5(
-                f"{ticker}{item.get('url', '')}".encode()
-            ).hexdigest()
+            domain = item.get("domain", "")
+            country = item.get("sourcecountry", "")
+            if domain:
+                domains.append(domain)
+            if country:
+                countries.append(country)
+        # Count top 5 unique sources and countries
+        from collections import Counter
+        top_sources = [d for d, _ in Counter(domains).most_common(5)]
+        top_countries = [c for c, _ in Counter(countries).most_common(5)]
 
-            # GDELT doesn't provide sentiment scores in artlist mode,
-            # Use None and mark source as "gdelt" for filtering
-            articles.append({
-                "id": article_id,
-                "title": item.get("title", ""),
-                "url": item.get("url", ""),
-                "source": "gdelt",
-                "summary": "",
-                "published_at": published_at,
-                "sentiment_score": None,
-                "sentiment_label": None,
-                "topics": json.dumps([item.get("domain", "")])
-            })
+        article_count = len(raw_articles)
+        coverage_label = _compute_coverage_label(article_count)
+        
+        top_article_urls = [
+            item.get("url", "")
+            for item in raw_articles[:5]
+            if item.get("url")
+        ]
+
+        coverage = {
+            "article_count": article_count,
+            "top_sources": top_sources,
+            "top_countries": top_countries,
+            "coverage_label": coverage_label,
+            "top_article_urls": top_article_urls
+        }
 
         # ------------------------------------------------------------------
         # STEP 4: Store in DB for future cache hits
         # ------------------------------------------------------------------
-        storage.store_news(ticker, articles)
+        storage.store_coverage(ticker, coverage)
         storage.close()
-        logger.info(f"Fetched and stored {len(articles)} GDELT articles for {ticker} (query: '{query_name}')")
+
+        logger.info(f"GDELT coverage for {ticker}: {coverage_label} ({article_count} articles)")
         return {
             "success": True,
             "ticker": ticker,
-            "source": "gdelt",
-            "articles": articles,
-            "article_count": len(articles),
-            "tone_summary": _compute_gdelt_tone(articles),
-            "evidence_claim": _build_gdelt_evidence_claim(ticker, query_name, articles)
+            "source": "api",
+            "coverage": coverage,
+            "evidence_claim": _build_gdelt_evidence_claim(ticker, query_name, coverage)
         }
     
     except requests.exceptions.Timeout:
@@ -405,11 +387,14 @@ def _build_evidence_claim(ticker: str, articles: list) -> str:
         a["title"] for a in articles[:3] if a.get("title")
     ]
     headlines_str = ", ".join(f"'{h}'" for h in top_headlines)
-
+    
+    urls = [a["url"] for a in articles[:3] if a.get("url")]
+    urls_str = "\n -".join(urls) if urls else "None available"
     return (
         f"{ticker} news sentiment ({sentiment['article_count']} articles): "
         f"{sentiment['label']} (avg score: {sentiment['score']}). "
         f"Top stories: {headlines_str}."
+        f"Reference URLs:\n - {urls_str}"
     )
 
 def _resolve_company_name(ticker: str, company_name: Optional[str] = None) -> str:
@@ -433,69 +418,52 @@ def _resolve_company_name(ticker: str, company_name: Optional[str] = None) -> st
         # "Apple Inc." → "Apple", "Tesla, Inc." → "Tesla"
         for suffix in [", Inc.", " Inc.", " Corp.", " Ltd.", " LLC", " Co."]:
             name = name.replace(suffix, "")
-            logger.debug(f"Resolved {ticker} → '{name}' via yfinance")
-            return name.strip()
+        logger.debug(f"Resolved {ticker} → '{name}' via yfinance")
+        return name.strip()
+    
     except Exception as e:
-            logger.warning(f"Could not resolve company name for {ticker}: {e}, using ticker as fallback")
-            return ticker
+        logger.warning(f"Could not resolve company name for {ticker}: {e}, using ticker as fallback")
+        return ticker
 
-def _compute_gdelt_tone(articles: list) -> dict:
-    """
-    Compute a simple coverage tone summary for GDELT articles.
-    Since GDELT artlist mode doesn't provide sentiment scores,
-    use article count as a proxy for coverage intensity.
-    """
-    count = len(articles)
-    if count == 0:
-        label = "No coverage"
-    elif count >= 15:
-        label = "High coverage"
-    elif count >= 5:
-        label = "Moderate coverage"
+def _compute_coverage_label(article_count: int) -> dict:
+    """Convert article count to human-readable coverage intensity label"""
+    if article_count == 0:
+        return "No coverage"
+    elif article_count >= 20:
+        return "High coverage"
+    elif article_count >= 8:
+        return "Moderate coverage"
     else:
-        label = "Low coverage"
-
-    return {
-        "label": label,
-        "article_count": count
-    }
+        return "Low coverage"
 
 def _build_gdelt_evidence_claim(
         ticker: str,
         company_name: str,
-        articles: list
+        coverage: Optional[dict]
     ) -> str:
     """
-    Build an evidence claim string for GDELT data.
+    Build an evidence claim for GDELT coverage summary.
     Example:
         "Apple (AAPL) global news coverage: Moderate coverage
          (8 articles, last 24h). Sources: reuters.com, bbc.co.uk,
          ft.com. Top stories: 'Apple expands in India', ..."
     """
-    if not articles:
+    if not coverage or coverage.get("article_count", 0) == 0:
         return f"No recent global news coverage found for {company_name} ({ticker})."
     
-    tone = _compute_gdelt_tone(articles)
+    sources_str = ", ".join(coverage.get("top_sources", [])[:3])
+    countries_str = ", ".join(coverage.get("top_countries", [])[:3])
 
-    # Extract unique domains as source names
-    domains = list({
-        json.loads(a.get("topics", '["]'))[0]
-        for a in articles
-        if a.get("topics")
-    })[:4]
-    domains_str = ", ".join(d for d in domains if d)
-    
-    # Top 3 headlines
-    top_headlines = [
-        a["title"] for a in articles[:3] if a.get("title")
-    ]
-    headlines_str = ", ".join((f"'{h}'" for h in top_headlines))
+    # Build verifiable URL list
+    urls = coverage.get("top_article_urls", [])
+    urls_str = "\n  - ".join(urls) if urls else "None available"
 
     return (
-        f"{company_name} ({ticker}) global news: {tone['label']} "
-        f"({tone['article_count']} articles, last 24h). "
-        f"Sources: {domains_str}. "
-        f"Top stories: {headlines_str}."
+        f"{company_name} ({ticker}) global media coverage: "
+        f"{coverage['coverage_label']} ({coverage['article_count']} articles, last 24h). "
+        f"Top sources: {sources_str}. "
+        f"Top regions: {countries_str}. "
+        f"Reference URLs:\n  - {urls_str}"
     )
 
 
