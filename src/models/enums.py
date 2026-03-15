@@ -18,3 +18,8 @@ class StepStatus(str, Enum):
     START = "start"
     END = "end"
     ERROR = "error"
+
+class IssueType(str, Enum):
+    """Types of issues identified by critic"""
+    REASONING = "REASONING" # fixable by analyst revision
+    EVIDENCE_GAP = "EVIDENCE_GAP" # requires new data gathering

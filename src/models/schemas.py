@@ -2,7 +2,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Any, Dict, List, Optional, Literal
 from datetime import datetime
-from .enums import SignalType, CritiqueSeverity, StepStatus
+from .enums import SignalType, CritiqueSeverity, StepStatus, IssueType
 
 # ==========================================================
 # REQUEST & CONTEXT
@@ -84,11 +84,15 @@ class AnalystOutput(BaseModel):
 # ==========================================================
 
 class CriticIssue(BaseModel):
-    """Single critique issue with severity"""
+    """Single critique issue with severity and type"""
     model_config = ConfigDict(use_enum_values=True) 
 
     issue: str = Field(..., description="Description of the problem")
     severity: CritiqueSeverity = Field(..., description="Impact level")
+    issue_type: IssueType = Field(
+        IssueType.REASONING,
+        description="REASONING = fixable by revision, EVIDENCE_GAP = requires new data"
+    )
 
 class CriticOutput(BaseModel):
     """Red-team evaluation from critic agent"""
@@ -123,6 +127,23 @@ class CriticOutput(BaseModel):
             len(self.critical_issues) == 0
             and len(self.unsupported_claims) == 0
             and self.assessment == "STRONG"
+        )
+    
+    def only_evidence_gaps(self) -> bool:
+        """
+        Returns True if ALL high-severity issues are evidence gaps.
+        Used by orchestrator to decide whether revision would help
+        """
+        high_severity_issues = [
+            i for i in self.critical_issues if i.severity == CritiqueSeverity.HIGH or i.severity == "HIGH"
+        ]
+
+        if not high_severity_issues:
+            return False
+        
+        return all(
+            i.issue_type == IssueType.EVIDENCE_GAP or i.issue_type == "EVIDENCE_GAP"
+            for i in high_severity_issues
         )
     
     def get_summary(self) -> str:

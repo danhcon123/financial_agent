@@ -243,7 +243,7 @@ def fetch_gdelt_news(
 
     if storage.has_fresh_coverage(ticker, max_age_hours=12):
         logger.info(f"Cache hit: returning stored news for {ticker}")
-        coverage  = storage.fetch_coverage(ticker, max_age_hours=12)
+        coverage  = storage.fetch_coverage(ticker, max_age_hours=24)
         storage.close()
         return {
             "success": True,

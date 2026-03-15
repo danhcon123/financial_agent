@@ -138,6 +138,27 @@ class Orchestrator:
             while not critic_output.is_clean() and iterations_completed < request.max_iterations:
                 iteration = iterations_completed + 1
 
+                # ── SMART REVISION GUARD ──────────────────────────────────────
+                # Check if ALL high-severity issues are evidence gaps.
+                # If so, revision cannot help - analyst has no new data to work with.
+                # Continuing would only degrade the thesis quality.
+                if critic_output.only_evidence_gaps():
+                    logger.info(
+                        f"[revision_guard] Stopping loop at iteration {iteration} - "
+                        f"all HIGH issues are EVIDENCE_GAP. "
+                        f"Revision cannot help without new data sources."
+                    )
+                    self._record_step(trace, f"revision_guard_{iteration}", StepStatus.END , {
+                        "reason": "evidence_gap",
+                        "high_issues": [
+                            i.issue for i in critic_output.critical_issues
+                            if i.severity in ("HIGH")
+                        ],
+                        "message": "Loop stopped - critique requires new evidence not revision"
+                    })
+                    break
+                # ── END GUARD ─────────────────────────────────────────────────
+
                 # Analyst revises based on critique history
                 self._record_step(trace, f"analyst_revise_{iteration}", StepStatus.START)
                 analyst_output = await self.analyst.revise(
@@ -159,7 +180,8 @@ class Orchestrator:
                 )
                 self._record_step(trace, f"critic_recheck_{iteration}", StepStatus.END, {
                     "assessment": critic_output.assessment,
-                    "is_clean": critic_output.is_clean()
+                    "is_clean": critic_output.is_clean(),
+                    "only_evidence_gaps": critic_output.only_evidence_gaps(),
                 })
 
                 iterations_completed = iteration
@@ -184,6 +206,13 @@ class Orchestrator:
                 [ev.model_dump() for ev in trace]
             )
 
+            # Determine why the loop stopped
+            loop_stop_reason = "max_iterations_reached"
+            if critic_output and critic_output.is_clean():
+                loop_stop_reason = "thesis_approved"
+            elif critic_output and critic_output.only_evidence_gaps():
+                loop_stop_reason = "evidence_gaps_detected"  
+
             result = RunResult(
                 run_id=run_id,
                 request=request,
@@ -195,7 +224,7 @@ class Orchestrator:
                 iterations_completed=iterations_completed,
                 ok=True
             )
-
+            logger.info(f"Loop stopped — reason: {loop_stop_reason}")
             logger.info(f"Run {run_id} completed successfully")
             logger.info(result.get_trace_summary())
             return result
@@ -553,6 +582,18 @@ if __name__ == "__main__":
         print(f"\nRun ID: {result.run_id}")
         print(f"Status: {'✅ SUCCESS' if result.ok else '❌ FAILED'}")
         print(f"Iterations: {result.iterations_completed}/{result.request.max_iterations}")
+        # Show why the loop stopped
+        if result.critic_output:
+            if result.critic_output.is_clean():
+                print(f"Loop Result: ✅ Thesis approved by critic")
+            elif result.critic_output.only_evidence_gaps():
+                print(f"Loop Result: ⚠️  Stopped early — evidence gaps detected")
+                print(f"Missing data:")
+                for issue in result.critic_output.critical_issues:
+                    if issue.issue_type in ("EVIDENCE_GAP", "EVIDENCE_GAP"):
+                        print(f"  - {issue.issue}")
+            else:
+                print(f"Loop Result: ⏱️  Max iterations reached")
         print(f"Artifacts: {result.artifacts_dir}")
         print(f"\n{'-'*80}")
         print("ANALYST THESIS:")

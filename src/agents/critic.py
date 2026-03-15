@@ -6,7 +6,7 @@ from typing import List, Dict, Any
 from src.config.settings import get_settings
 from src.config.prompts import CRITIC_SYSTEM_PROMPT
 from src.models.schemas import ResearchRequest, EvidenceItem, AnalystOutput, CriticOutput, CriticIssue
-from src.models.enums import CritiqueSeverity
+from src.models.enums import CritiqueSeverity, IssueType
 from src.utils.logger import get_logger
 from src.utils.json_parser import parse_json_safely, safe_list_extract
 import json
@@ -120,7 +120,11 @@ Respond with ONLY valid JSON (no markdown, no preamble) using this structure:
 {{
     "assessment": "STRONG|MODERATE|WEAK",
     "critical_issues": [
-        {{"issue": "description", "severity":"HIGH|MEDIUM|LOW"}},
+        {{
+            "issue": "description", 
+            "severity": "HIGH|MEDIUM|LOW",
+            "issue_type": "REASONING|EVIDENCE_GAP"    
+        }},
         ...
     ],
     "missing_evidence": ["type of data needed 1", "..."],
@@ -137,7 +141,13 @@ Evaluation Criteria:
 5. Any signs of confirmation bias or cherry-picking?
 6. What critical data is missing?
 
-Be specific, constructive, and prioritize  high-severity issues.
+Be specific, constructive, and prioritize high-severity issues.
+
+CRITICAL - issue_type classification rules:
+- REASONING: The analyst has the evidence but drew wrong conclusions, or made logical leaps, showed confirmation bias, cited wrong evidence ID, or made an unsupported causal claim. The analyst CAN fix this by rewriting with the existing evidence.
+- EVIDENCE_GAP: The claim requires data that is genuinely absent from the provided evidence (E1-E4). No amount of rewriting can fix this - new data sources are needed. Examples: missing earnings data, no AI-specific metrics, unverified external statistics.
+
+when in doubt: if the analyst could fix the issue by being more careful with existing evidence -> REASONING. If fixing it requires fetching new data -> EVIDENCE_GAP.
 """
         return prompt
     
@@ -194,6 +204,7 @@ Be specific, constructive, and prioritize  high-severity issues.
 
             issue_text = str(item.get("issue", "")).strip()
             severity_str = str(item.get("severity", "MEDIUM")).upper()
+            issue_type_str = str(item.get("issue_type", "REASONING")).upper()
             
             if not issue_text:
                 continue
@@ -204,7 +215,13 @@ Be specific, constructive, and prioritize  high-severity issues.
                 logger.warning(f"Invalid severity '{severity_str}', defaulting to MEDIUM")
                 severity = CritiqueSeverity.MEDIUM
         
-            result.append(CriticIssue(issue=issue_text, severity=severity))
+            try:
+                issue_type = IssueType(issue_type_str)
+            except ValueError:
+                logger.warning(f"Invalid issue_type '{issue_type_str}', defaulting to REASONING")
+                issue_type = IssueType.REASONING
+
+            result.append(CriticIssue(issue=issue_text, severity=severity, issue_type=issue_type))
 
         return result[:10]
     
