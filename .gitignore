@@ -10,3 +10,4 @@ venv/
 data/*.db
 tests/data/processed
 data/processed
+*.pptx
