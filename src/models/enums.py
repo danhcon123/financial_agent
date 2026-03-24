@@ -23,3 +23,21 @@ class IssueType(str, Enum):
     """Types of issues identified by critic"""
     REASONING = "REASONING" # fixable by analyst revision
     EVIDENCE_GAP = "EVIDENCE_GAP" # requires new data gathering
+
+class TaskType(str, Enum):
+    """Types of research tasks the Planner can emit"""
+    PRICE_DATA = "PRICE_DATA"
+    NEWS_SEARCH = "NEWS_SEARCH"
+    FUNDAMENTALS = "FUNDAMENTALS"
+    PEER_COMPARE = "PEER_COMPARE"
+    EARNINGS_CHECK = "EARNINGS_CHECK"
+    FILING_SUMMARY = "FILING_SUMMARY"
+
+class TaskStatus(str, Enum):
+    """Lifecycle status of a research task"""
+    PENDING = "PENDING"
+    IN_PROGRESS = "IN_PROGRESS"
+    DONE = "DONE"
+    FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
+    

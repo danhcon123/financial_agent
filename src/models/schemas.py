@@ -2,7 +2,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Any, Dict, List, Optional, Literal
 from datetime import datetime
-from .enums import SignalType, CritiqueSeverity, StepStatus, IssueType
+from .enums import SignalType, CritiqueSeverity, StepStatus, IssueType, TaskType, TaskStatus
 
 # ==========================================================
 # REQUEST & CONTEXT
@@ -42,6 +42,98 @@ class EvidenceItem(BaseModel):
         }
     )
 
+# ==========================================================
+# RESEARCH TASK (Planner output)
+# ==========================================================
+
+class ResearchTask(BaseModel):
+    """Structured task emitted by the Planner agent"""
+    model_config = ConfigDict(use_enum_values=True)
+    
+    task_id: str = Field(..., description = "Unique task identifier e.g. T1, T2")
+    task_type: TaskType = Field(..., description="Category of research needed")
+    entity: str = Field(..., description="Primary entity e.g. ticker, company name")
+    question: str = Field(..., description="Specific question this task should answer")
+    priority: int = Field(1, ge=1, le=3, description="1=high, 2=medium, 3=low")
+    why_needed: str = Field(..., description="Reasoning - why this fills a gap")
+    depends_on: List[str] = Field(
+        default_factory = list,
+        description="task_ids this depends on"
+    )
+    status: TaskStatus = Field(TaskStatus.PENDING, description="Execution status")
+    result_evidence_ids: List[str] = Field(
+        default_factory=list,
+        description="EvidenceItem IDs produced by this task"
+    )
+
+# ==========================================================
+# ANALYST OUTPUT
+# ==========================================================
+class ResearchCycleState(BaseModel):
+    """Full state object carried through research cycles"""
+    research_question: str = Field(..., description="The original user query")
+    ticker: str = Field(..., description="Primary ticker under analysis")
+    
+    # Task board
+    task_board: List[ResearchTask] = Field(
+        default_factory=list,
+        description="All tasks - pending, done, failed"
+    )
+
+    # Evidence vault - append only
+    evidence_vault = List[EvidenceItem] = Field(
+        default_factory=list,
+        description="All normalized evidence accumulated across cycles"
+    )
+    
+    # History
+    draft_history: List[AnalystOutput] = Field(
+        default_factory=list,
+        description="All analyst drafts in order"
+    )
+    critic_history: List[CriticOutput] = Field(
+        default_factory=list,
+        description="All critic reviews in order"
+    )
+    
+    # Gap tracking
+    open_gaps: List[str] = Field(
+        default_factory=list,
+        description="Gaps that have been filled"
+    )
+    
+    # Budgets
+    iteration_budget: int = Field(3, ge=0, le=5, description="Max research cycles remaining")
+    research_budget: int = Field(6, ge=0, le=10, description="Max new tasks remaining across all cycles")
+
+    # Stop signal
+    stop_reason: Optional[str] = Field(None, description="Why the loop stopped")
+    final_confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
+    
+    # Convenience helpers
+    def vault_ids(self) -> List[str]:
+        """All evidence IDs currently in vault"""
+        return [e.id for e in self.evidence_vault]
+
+    def pending_tasks(self) -> List[ResearchTask]:
+        return [t for t in self.task_board if t.status == TaskStatus.PENDING]
+    
+    def done_tasks(Self) -> List[ResearchTask]:
+        return [t for t in self.task_board if t.status == TaskStatus.DONE]
+    
+    def latest_draft(self) -> Optional[AnalystOutput]:
+        return self.draft_history[-1] if self.draft_history else None
+    
+    def latest_critique(self) -> Optional[CriticOutput]:
+        return self.critic_history[-1] if self.critic_history else None
+    
+    def evidence_count_changed(self, previous_count: int) -> bool:
+        """Did the vault actually grow this cycle"""
+        return len(self.evidence_vault) > previous_count
+    
+    def budget_exhausted(self) -> bool:
+        return self.iteration_budget <= 0 or self.research_budget <= 0
+    
 # ==========================================================
 # ANALYST OUTPUT
 # ==========================================================
@@ -187,9 +279,8 @@ class RunResult(BaseModel):
     """Complete research run output with full trace"""
     run_id: str = Field(..., description="Unique run identifier")
     request: ResearchRequest
+    state: Optional[ResearchCycleState] = None
     evidence: List[EvidenceItem] = Field(default_factory=list)
-    # analyst_output: AnalystOutput
-    # critic_output: CriticOutput
     analyst_output: Optional[AnalystOutput] = None
     critic_output: Optional[CriticOutput] = None    
     trace: List[StepEvent] = Field(default_factory=list)
