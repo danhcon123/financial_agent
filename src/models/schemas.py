@@ -26,18 +26,41 @@ class EvidenceItem(BaseModel):
     """Single piece of evidence with provenance tracking"""
     id: str = Field(..., description="Unique identifier (e.g., 'E1', 'E2')")
     claim: str = Field(..., description="Factual claim or data point")
-    source: str = Field("unknown", description="Data source identifier")
-    timestamp: Optional[datetime] = Field(None, description="When evidence was gathered")
-    confidence: float = Field(0.5, ge=0.0, le=1.0, description="Confidence score")
-    raw: Optional[Dict[str, Any]] = Field(None, description="Raw data payload")
 
+    # Source metadata
+    source: str = Field("unknown", description="Data source identifier")
+    entity: str = Field("", description="Primary entity e.g. ticker, company name")
+    evidence_type: str = Field("", description="PRICE_DATA | TECHNICAL_ANALYSIS | NEWS_SENTIMENT | NEWS_COVERAGE")
+    
+    # Structured content
+    summary: str = Field("", description="Human-readable summary of this evidence")
+    key_claims: List[str] = Field(default_factory=list, description="Extracted key claims")
+    directional_impact: str = Field("UNKNOWN", description="BULLISH | BEARISCH | NEUTRAL | MIXED | UNKNOWN")
+
+    # Timestampes
+    timestamp: Optional[datetime] = Field(None, description="When evidence was gathered")
+    published_at: Optional[datetime] = Field(None, description="When the source was published")
+    
+    # Quality
+    confidence: float = Field(0.5, ge=0.0, le=1.0, description="Confidence score")
+    dedupe_hash: Optional[str] = Field(None, description="Content fingerprint for deduplication")
+    
+    # Raw payload — still kept for full fidelity
+    raw: Optional[Dict[str, Any]] = Field(None, description="Raw data payload")
+    source_url: Optional[str] = Field(None, description="Primary URL for this evidence")
+    
     model_config = ConfigDict(
         json_schema_extra = {
             "example": {
-                "id": "E1",
-                "claim": "Revenue grew 23% YoY in Q3 2024",
-                "source": "earning_transcript",
-                "confidence": 0.9
+                "id": "E_a1b2c3d4e5f6",
+                "claim": "AAPL closed at $189.50, up 4.2% over 90 days.",
+                "source": "yahoo_finance",
+                "entity": "AAPL",
+                "evidence_type": "PRICE_DATA",
+                "summary": "AAPL moved from $181.80 to $189.50 over 90 days.",
+                "key_claims": ["Price change: +4.2%", "Avg volume: 54,000,000"],
+                "directional_impact": "BULLISH",
+                "confidence": 0.9,
             }
         }
     )
@@ -114,6 +137,13 @@ class ResearchCycleState(BaseModel):
     def vault_ids(self) -> List[str]:
         """All evidence IDs currently in vault"""
         return [e.id for e in self.evidence_vault]
+    
+    def vault_depupe_hashes(self) -> List[str]:
+        """All dedupe hashes for duplicate detection"""
+        return[
+            e.dedupe_hash for e in self.evidence_vault
+            if e.dedupe_hash is not None
+        ]
 
     def pending_tasks(self) -> List[ResearchTask]:
         return [t for t in self.task_board if t.status == TaskStatus.PENDING]
