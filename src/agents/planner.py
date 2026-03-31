@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple, Set
 from dataclasses import dataclass
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from agents.analyst import AnalystAgent
 from src.models.enums import TaskStatus, TaskType
 from src.models.schemas import (
     CriticOutput,
@@ -224,3 +225,355 @@ def _format_coverage_summary(coverage: Dict[str, bool]) -> str:
 # ==========================================================
 # PROMPT HELPERS
 # ==========================================================
+def _summarize_vault(evidence: List[EvidenceItem]) -> str:
+    """Summarize evidence vault for prompt."""
+    if not evidence:
+        return "No evidence gathered yet."
+    
+    lines = []
+    for item in evidence[:20]:
+        source = getattr(item, "source", "unknown")
+        evidence_type = getattr(item, "evidence_type", None)
+        claim = getattr(item, "claim", "") or getattr(item, "summary", "") or ""
+        confidence = getattr(item, "confidence", 0.0)
+        date = getattr(item, "published_at", None) or getattr(item, "timestamp", None)
+
+        etype = f" ({evidence_type})" if evidence_type else ""
+        dstr = f" | date={date}" if date else ""
+        lines.append(f"- [{source}{etype} | conf={confidence:.2f}{dstr}] {claim[:160]}")
+
+    return "\n".join(lines)
+
+def _summarize_existing_tasks(task_board: List[ResearchTask]) -> str:
+    """Summarize existing task board for prompt."""
+    if not task_board:
+        return "No tasks planned yet."
+    
+    lines = []
+    for task in task_board:
+        lines.append(
+            f"- [{task.task_id}] {task.task_type} | {_normalize_entity(task.entity)} | "
+            f"status={task.status} | P{task.priority} | {task.question[:120]}"
+        )
+    return "\n".join(lines)
+
+def _summarize_critic_gaps(critic: CriticOutput) -> str:
+    """Summarize critic output for prompt."""
+    lines = []
+    
+    gap_issues = [
+        i for i in critic.critical_issues
+        if str(i.issue_type) in ("EVIDENCE_GAP", "IssueType.EVIDENCE_GAP")
+    ]
+    for issue in gap_issues:
+        lines.append(f"- severity={issue.severity} | {issue.issue}")
+
+    for m in critic.missing_evidence or []:
+        lines.append(f"- missing: {m}")
+    
+    return "\n".join(lines) if lines else "No evidence gaps identified by critic."
+
+def _critic_has_evidence_gaps(critic: CriticOutput) -> bool:
+    """Check if critic identified evidence gaps."""
+    if critic.missing_evidence:
+        return True
+    for issue in critic.critical_issues:
+        if str(issue.issue_type) in ("EVIDENCE_GAP", "IssueType.EVIDENCE_GAP"):
+            return True
+    return False
+
+
+# ==========================================================
+# TASK BUILDERS / VALIDATORS
+# ==========================================================
+
+def _next_task_id(existing_tasks: List[ResearchTask], cycle: int) -> str:
+    """Generate next task ID."""
+    existing_ids = {t.task_id for t in existing_tasks}
+    n = 1
+    while True:
+        candidate = f"T{cycle}_{n}"
+        if candidate not in existing_ids:
+            return candidate
+        n += 1
+
+def _assign_dependencies(task: ResearchTask, all_tasks: List[ResearchTask]) -> List[str]:
+    """Assign dependencies based on question intent."""
+    by_type = {str(t.task_type.value if hasattr(t.task_type, "value") else t.task_type).upper(): t for t in all_tasks}
+
+    current_type = str(task.task_type.value if hasattr(task.task_type, "value") else task.task_type).upper()
+
+    if current_type == "TECHNICALS" and "PRICE_DATA" in by_type:
+        return [by_type["PRICE_DATA"].task_id]
+    if current_type == "NEWS_RESEARCH" and "PRICE_DATA" in by_type:
+        return [by_type["PRICE_DATA"].task_id]
+    return []
+
+def _fallback_task_for_gap(
+    request: ResearchRequest,
+    coverage: Dict[str, bool],
+    existing_tasks: List[ResearchTask],
+    cycle: int,
+) -> List[ResearchTask]:
+    """Generate a fallback task if critical gaps are identified."""
+    ticker = _normalize_entity(request.ticker or "UNKNOWN")
+
+    candidates: List[Tuple[str, str, int, str]] = []
+
+    if not coverage["PRICE_DATA"]:
+        candidates.append((
+            "PRICE_DATA",
+            f"What is the 90-day price trend and volume profile for {ticker}?",
+            1,
+            "Baseline market data is still missing."
+        ))
+
+    if not coverage["TECHNICALS"]:
+        candidates.append((
+            "TECHNICALS",
+            f"What are the RSI, MACD, and Bollinger Bands for {ticker} based on recent price data?",
+            1,
+            "Technical signal context is still missing.",
+        ))
+    
+    if not coverage["NEWS_SEARCH"]:
+        candidates.append((
+            "FUNDAMENTALS",
+            f"What are the lagest key fundamentals and valuation metrics for {ticker}?",
+            1,
+            "Core business and valuation evidence is still missing.",
+        ))
+    
+    tasks: List[ResearchTask] = []
+    for task_type, question, priority, why_needed in candidates[:1]:
+        tasks = (ResearchTask(
+            task_id=_next_task_id(existing_tasks + tasks, cycle),
+            task_type=TaskType(task_type),
+            entity=ticker,
+            question=question,
+            priority=priority,
+            why_needed=why_needed,
+            depends_on=[],
+            status=TaskStatus.PENDING,
+            result_evidence_ids=[],
+        ))
+        tasks.append(tasks)
+    return tasks
+
+def _parse_task_list(
+    raw_json: Any,
+    existing_tasks: List[ResearchTask],
+    cycle: int,
+    max_tasks: int,
+    coverage: Dict[str, bool],
+) -> List[ResearchTask]:
+    """Parse and filter planner tasks."""
+    if not isinstance(raw_json, list):
+        logger.warning("[planner] Expected list, got %s", type(raw_json))
+        return []
+    
+    valid_types = {t.value for t in TaskType}
+    tasks: List[ResearchTask] = []
+
+    existing_fingerprints: Set[str] = set()
+    for t in existing_tasks:
+        tt = str(t.task_type.value if hasattr(t.task_type, "value") else t.task_type).upper()
+        existing_fingerprints.add(_task_fingerprint(tt, t.entity, t.question))
+
+    for raw_task in raw_json[:max_tasks]:
+        if not isinstance(raw_task, dict):
+            continue
+
+        task_type_str = str(raw_task.get("task_type", "")).upper().strip()
+        if task_type_str not in valid_types:
+            logger.warning("[planner] Unknown task_type '%s' — skipping", task_type_str)
+            continue
+
+        if task_type_str in coverage and coverage[task_type_str]:
+            logger.info("[planner] Skipping %s because coverage already exists", task_type_str)
+            continue
+
+        entity = _normalize_entity(str(raw_task.get("entity", "")).strip())
+        question = str(raw_task.get("question", "")).strip()
+
+        if not entity or not question:
+            continue
+
+        fp = _task_fingerprint(task_type_str, entity, question)
+        if fp in existing_fingerprints:
+            logger.info("[planner] Duplicate task fingerprint skipped: %s", fp)
+            continue
+
+        priority_raw = raw_task.get("priority", 2)
+        try:
+            priority = max(1, min(3, int(priority_raw))) # clamp 1..3
+        except( ValueError, TypeError):
+            priority = 2
+
+        task = ResearchTask(
+            task_id=_next_task_id(existing_tasks + tasks, cycle),
+            task_type=TaskType(task_type_str),
+            entity=entity,
+            question=question,
+            priority=priority,
+            why_needed=str(raw_task.get("why_needed", "")).strip() or "Gap identified by critic",
+            depends_on=[], # ignore LLM deps
+            status=TaskStatus.PENDING,
+            result_evidence_ids=[],
+        )
+
+        tasks.append(task)
+        existing_fingerprints.add(fp)
+    
+    for t in tasks:
+        t.depends_on = _assign_dependencies(t, existing_tasks + tasks)
+    
+    return tasks
+
+# ==========================================================
+# INITIAL PLAN
+# ==========================================================
+
+def _is_tactical_horizon(horizon: Optional[str]) -> bool:
+    """Check for short-term horizon."""
+    h = _normalize_text(horizon or "")
+    return any(k in h for k in ["short", "intraday", "days", "weeks", "near term", "swing"])
+
+def _query_mentions_compare(query: Optional[str]) -> bool:
+    """Check if query ask for comparison."""
+    q = _normalize_text(query)
+    return any(k in q for k in ["compare", "vs", "versus", "benchmark", "relative performance", "peer", "better than", "alternative"])
+
+def _query_mentions_news(query: str) -> bool:
+    """Check if query asks for news"""
+    q = _normalize_text(query)
+    return any(k in q for k in ["news", "headlines", "latest", "breaking", "sentiment", "catalyst", "media", "coverage", "recent", "why now"])
+
+def build_intial_tasks(request: ResearchRequest) -> List[ResearchTask]:
+    """Build initial task set."""
+    tasks: List[ResearchTask] = []
+    ticker = _normalize_entity(request.ticker or "UNKNOWN")
+    query = request.query or ""
+    
+    def add_task(task_type: str, question: str, priority: int, why_needed: str) -> None:
+        """Append one task."""
+        tasks = ResearchTask(
+            task_id=f"T0_{len(tasks)+1}",
+            task_type=TaskType(task_type),
+            entity=ticker,
+            question=question,
+            priority=priority,
+            why_needed=why_needed,
+            depends_on=[],
+            status=TaskStatus.PENDING,
+            result_evidence_ids=[],
+        )
+        tasks.append(tasks)
+
+    add_task(
+        "PRICE_DATA",
+        f"What is the 90-day price trend and volume profile for {ticker}?",
+        1,
+        "Baseline price and volume evidence is required for any thesis.",
+    )
+
+    if _is_tactical_horizon(request.horizon) or _query_mentions_news(query):
+        add_task(
+            "NEWS_SEARCH",
+            f"What recent news, sentiment, and catalysts are affecting {ticker}?",
+            1,
+            "Recent catalysts are important for tactical or event-driven analysis.",
+        )
+    
+    if _is_tactical_horizon(request.horizon):
+        add_task(
+            "TECHNICALS",
+            f"What are the RSI, MACD, and Bollinger Band signals for {ticker} based on recent price data?",
+            1,
+            "Technical signals matter for short-horizon timing decisions.",
+        )
+    else:
+        add_task(
+            "FUNDAMENTALS",
+            f"What are the key fundamentals and valuation metrics for {ticker}?",
+            1,
+            "Core business quality and valuation are required for non-tactical thesis work.",
+        )
+
+    if _query_mentions_compare(query):
+        add_task(
+            "PEER_COMPARE",
+            f"How does {ticker} compare with relevant peers on returns, valuation, and growth expectations?",
+            2,
+            "Relative positioning is required because the request implies comparison.",
+        )
+
+    for t in tasks:
+        t.depends_on = _assign_dependencies(t, tasks)  # set deps
+
+    logger.info("[planner] Build %d initial tasks for %s", len(tasks), ticker)
+    return tasks
+
+# ==========================================================
+# PLANNER AGENT
+# ==========================================================
+
+class PlannerAgent:
+    MAX_TASK_PER_CYCLE = 3
+    MAX_RETRIES = 2
+
+    def __init__(self):
+        analyst = AnalystAgent()
+        self.llm = analyst.llm
+        logger.info("[planner] PlannerAgent initialized")
+
+    def initial_plan(self, request: ResearchRequest) -> PlannerResult:
+        """Return deterministic intial plan."""
+        tasks = build_initial_tasks(request)
+        return PlannerResult(
+            tasks=tasks,
+            planner_status="ok",
+            used_llm=False,
+            used_fallback=False,
+            notes=["Initial plan generated without LLM"]
+        )
+    
+    async def replan(
+        self,
+        request: ResearchRequest,
+        state: ResearchCycleState,
+        critic: CriticOutput,
+        cycle: int,
+    ) -> PlannerAgent:
+        """Generate follow-up tasks based on critic feedback."""
+        if state.research_budget <= 0:
+            return PlannerResult(
+                tasks=[],
+                planner_status="budget_exhausted",
+                used_llm=False,
+                used_fallback=False,
+                notes=["Research budget exhausted, no new tasks planned."]
+            )
+        
+        if not _critic_has_evidence_gaps(critic):
+            return PlannerResult(
+                tasks=[],
+                planner_status="no_gaps",
+                used_llm=False,
+                used_fallback=False,
+                notes=["Critic did not identify any evidence gaps, no new tasks needed."]
+            )
+        
+        coverage = _compute_coverage_state(state.evidence_vault, state.task_board)
+        max_tasks = min(self.MAX_TASK_PER_CYCLE, state.research_budget)
+
+        evidence_summary = _summarize_vault(state.evidence_vault)
+        existing_tasks_str = _summarize_existing_tasks(state.task_board)
+        critic_gaps = _summarize_critic_gaps(critic)
+        coverage_summary = _format_coverage_summary(coverage)
+
+        system_msg = SystemMessage(content=PLANNER_SYSTEM_PROMPT.format(max_tasks=max_tasks))
+
+        base_human_msg = HumanMessage(content=PLANNER_HUMAN_PROMPT.format(
+            ticker = _normalize_entity(request.ticker or "N/A"),
+        ))
