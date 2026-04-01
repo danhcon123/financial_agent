@@ -576,4 +576,44 @@ class PlannerAgent:
 
         base_human_msg = HumanMessage(content=PLANNER_HUMAN_PROMPT.format(
             ticker = _normalize_entity(request.ticker or "N/A"),
+            query = request.query,
+            horizon = request.horizon,
+            coverage_summary = coverage_summary,
+            evidence_summary = evidence_summary,
+            existing_tasks = existing_tasks_str,
+            critic_gaps = critic_gaps,
+            max_tasks = max_tasks,
         ))
+
+        parsed_json = None
+        raw_output = ""
+
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                t0 = time.perf_counter()
+
+                if attempt == 0:
+                    messages = [system_msg, base_human_msg]
+                else:
+                    messages= [
+                        system_msg,
+                        base_human_msg,
+                        HumanMessage(content=PLANNER_RETRY_PROMPT),
+                    ]
+
+                response = await self.llm.ainvoke(messages)
+                raw_output = response.content
+                elapsed = (time.perf_counter() - t0) * 1000
+
+                logger.info("[planner] LLM responded in %.0fms (attempt %d)", elapsed, attempt+1)
+                logger.debug("[planner] Raw output: %s", str(raw_output)[:500])
+
+                parsed_json = extract_json(raw_output)
+                if parsed_json is not None:
+                    break
+
+            except Exception as e:
+                logger.error("[planner] LLM generation failed on attempt %d: %s", attempt+1, str(e))
+
+        if parsed_json is None:
+            fall_back
