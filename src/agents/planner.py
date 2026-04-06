@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple, Set
 from dataclasses import dataclass
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from agents.analyst import AnalystAgent
+from src.agents.analyst import AnalystAgent
 from src.models.enums import TaskStatus, TaskType
 from src.models.schemas import (
     CriticOutput,
@@ -50,7 +50,7 @@ Return ONLY a JSON array. No prose. No markdown.
 Each item must follow this schema:
 [
     {
-        "task_type": "<one of: PRICE_DATA | TECHNICALS |NEWS_SEARCH | FUNDAMENTALS | PEER_COMPARE | EARNINGS_CHECK | FILING_SUMMARY>",
+        "task_type": "<one of: PRICE_DATA | TECHNICALS | NEWS_SEARCH | FUNDAMENTALS | PEER_COMPARE | EARNINGS_CHECK | FILING_SUMMARY>",
         "entity": "<ticker or company name>",
         "question": "<specific question answerable by a single retrieval or calculation step>",
         "priority": <1 | 2 | 3>,
@@ -106,7 +106,7 @@ If no tasks are needed, return [].
 # NORMALIZATION / FINGERPRINTS
 # ==========================================================
 
-def _normalize_text(text: str) -> str:
+def _normalize_text(text: Optional[str]) -> str:
     """Normalize text for matching."""
     text = text.lower().strip()
     text = re.sub(r"\s+", " ", text)
@@ -126,12 +126,12 @@ def _question_intent_key(question: str) -> str:
 
     patterns = [
         (r"(90 day|price trend|volume|ohlcv|price action)", "price_trend"),
-        (r"(rsi|macd|bollinger|technical indicator| momtentum)", "technicals"),
+        (r"(rsi|macd|bollinger|technical indicator|momentum)", "technicals"),
         (r"(news|sentiment|coverage|catalyst|headline)", "news"),
         (r"(revenue|margin|eps|cash flow|valuation|balance sheet|fundamental)", "fundamentals"),
         (r"(peer|compare|benchmark|relative|vs)", "peer_compare"),
         (r"(earnings|q\d|quarterly|guidance|results)", "earnings_check"),
-        (r"(filing|10k|10q|sec|anual report)", "filing_summary"),
+        (r"(filing|10k|10q|sec|annual report)", "filing_summary"),
     ]
 
     for pattern, key in patterns:
@@ -183,7 +183,7 @@ def _infer_coverage_key_from_evidence(item: EvidenceItem) -> Optional[str]:
         return "PEER_COMPARE"
     if any(k in t for k in ["earnings", "q1", "q2", "q3", "q4", "quarterly result", "guidance"]):
         return "EARNINGS_CHECK"
-    if any(k in t for k in ["filing", "10-k", "10-q", "sec filling", "annual report"]):
+    if any(k in t for k in ["filing", "10-k", "10-q", "sec filing", "annual report"]):
         return "FILING_SUMMARY"
     
     return None
@@ -305,7 +305,7 @@ def _assign_dependencies(task: ResearchTask, all_tasks: List[ResearchTask]) -> L
 
     if current_type == "TECHNICALS" and "PRICE_DATA" in by_type:
         return [by_type["PRICE_DATA"].task_id]
-    if current_type == "NEWS_RESEARCH" and "PRICE_DATA" in by_type:
+    if current_type == "NEWS_SEARCH" and "PRICE_DATA" in by_type:
         return [by_type["PRICE_DATA"].task_id]
     return []
 
@@ -338,15 +338,23 @@ def _fallback_task_for_gap(
     
     if not coverage["NEWS_SEARCH"]:
         candidates.append((
-            "FUNDAMENTALS",
-            f"What are the lagest key fundamentals and valuation metrics for {ticker}?",
+            "NEWS_SEARCH",
+            f"What recent news, sentiment, and catalysts are affecting {ticker}?",
             1,
-            "Core business and valuation evidence is still missing.",
+            "Catalyst and market-perception evidence is still missing.",
         ))
     
+    if not coverage["FUNDAMENTALS"]:
+        candidates.append((
+            "FUNDAMENTALS",
+            f"What are the key fundamentals and valuation metrics for {ticker}?",
+            1,
+            "Core business quality and valuation evidence is still missing.",
+        ))
+
     tasks: List[ResearchTask] = []
     for task_type, question, priority, why_needed in candidates[:1]:
-        tasks = (ResearchTask(
+        task = (ResearchTask(
             task_id=_next_task_id(existing_tasks + tasks, cycle),
             task_type=TaskType(task_type),
             entity=ticker,
@@ -357,7 +365,11 @@ def _fallback_task_for_gap(
             status=TaskStatus.PENDING,
             result_evidence_ids=[],
         ))
-        tasks.append(tasks)
+        tasks.append(task)
+
+    for t in tasks:
+        t.depends_on = _assign_dependencies(t, existing_tasks + tasks)
+
     return tasks
 
 def _parse_task_list(
@@ -441,15 +453,15 @@ def _is_tactical_horizon(horizon: Optional[str]) -> bool:
 
 def _query_mentions_compare(query: Optional[str]) -> bool:
     """Check if query ask for comparison."""
-    q = _normalize_text(query)
+    q = _normalize_text(query or "")
     return any(k in q for k in ["compare", "vs", "versus", "benchmark", "relative performance", "peer", "better than", "alternative"])
 
-def _query_mentions_news(query: str) -> bool:
+def _query_mentions_news(query: Optional[str]) -> bool:
     """Check if query asks for news"""
-    q = _normalize_text(query)
+    q = _normalize_text(query or "")
     return any(k in q for k in ["news", "headlines", "latest", "breaking", "sentiment", "catalyst", "media", "coverage", "recent", "why now"])
 
-def build_intial_tasks(request: ResearchRequest) -> List[ResearchTask]:
+def _build_initial_tasks(request: ResearchRequest) -> List[ResearchTask]:
     """Build initial task set."""
     tasks: List[ResearchTask] = []
     ticker = _normalize_entity(request.ticker or "UNKNOWN")
@@ -457,7 +469,7 @@ def build_intial_tasks(request: ResearchRequest) -> List[ResearchTask]:
     
     def add_task(task_type: str, question: str, priority: int, why_needed: str) -> None:
         """Append one task."""
-        tasks = ResearchTask(
+        task = ResearchTask(
             task_id=f"T0_{len(tasks)+1}",
             task_type=TaskType(task_type),
             entity=ticker,
@@ -468,7 +480,7 @@ def build_intial_tasks(request: ResearchRequest) -> List[ResearchTask]:
             status=TaskStatus.PENDING,
             result_evidence_ids=[],
         )
-        tasks.append(tasks)
+        tasks.append(task)
 
     add_task(
         "PRICE_DATA",
@@ -529,7 +541,7 @@ class PlannerAgent:
 
     def initial_plan(self, request: ResearchRequest) -> PlannerResult:
         """Return deterministic intial plan."""
-        tasks = build_initial_tasks(request)
+        tasks = _build_initial_tasks(request)
         return PlannerResult(
             tasks=tasks,
             planner_status="ok",
@@ -544,7 +556,7 @@ class PlannerAgent:
         state: ResearchCycleState,
         critic: CriticOutput,
         cycle: int,
-    ) -> PlannerAgent:
+    ) -> PlannerResult:
         """Generate follow-up tasks based on critic feedback."""
         if state.research_budget <= 0:
             return PlannerResult(
@@ -608,7 +620,7 @@ class PlannerAgent:
                 logger.info("[planner] LLM responded in %.0fms (attempt %d)", elapsed, attempt+1)
                 logger.debug("[planner] Raw output: %s", str(raw_output)[:500])
 
-                parsed_json = extract_json(raw_output)
+                parsed_json = _extract_json(raw_output)
                 if parsed_json is not None:
                     break
 
@@ -616,4 +628,47 @@ class PlannerAgent:
                 logger.error("[planner] LLM generation failed on attempt %d: %s", attempt+1, str(e))
 
         if parsed_json is None:
-            fall_back
+            fallback_tasks = _fallback_task_for_gap(request, coverage, state.task_board, cycle)
+            return PlannerResult(
+                tasks=fallback_tasks,
+                planner_status="llm_failed",
+                used_llm=True,
+                used_fallback=True,
+                notes=[
+                    "Planner LLM failed; deterministic fallback task used."
+                ]
+            )
+    
+        new_tasks = _parse_task_list(
+            raw_json=parsed_json,
+            existing_tasks=state.task_board,
+            cycle=cycle,
+            max_tasks=max_tasks,
+            coverage=coverage,
+        )
+
+        if not new_tasks:
+            return PlannerResult(
+                tasks=[],
+                planner_status="no_gaps",
+                used_llm=True,
+                used_fallback=False,
+                notes=["No valid uncovered tasks were produced."]
+            )
+        logger.info("[planner] Generated %d new task(s) for cycle %d", len(new_tasks), cycle)
+        for task in new_tasks:
+            logger.info(
+                "[planner] New task: %s | %s | P%d | %s",
+                task.task_type,
+                task.entity,
+                task.priority,
+                task.question[:100]
+            )
+            
+        return PlannerResult(
+            tasks=new_tasks,
+            planner_status="ok",
+            used_llm=True,
+            used_fallback=False,
+            notes=["Planner produced valid tasks."]
+        )

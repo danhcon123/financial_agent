@@ -138,7 +138,7 @@ class ResearchCycleState(BaseModel):
         """All evidence IDs currently in vault"""
         return [e.id for e in self.evidence_vault]
     
-    def vault_depupe_hashes(self) -> List[str]:
+    def vault_dedupe_hashes(self) -> List[str]:
         """All dedupe hashes for duplicate detection"""
         return[
             e.dedupe_hash for e in self.evidence_vault
@@ -148,7 +148,7 @@ class ResearchCycleState(BaseModel):
     def pending_tasks(self) -> List[ResearchTask]:
         return [t for t in self.task_board if t.status == TaskStatus.PENDING]
     
-    def done_tasks(Self) -> List[ResearchTask]:
+    def done_tasks(self) -> List[ResearchTask]:
         return [t for t in self.task_board if t.status == TaskStatus.DONE]
     
     def latest_draft(self) -> Optional[AnalystOutput]:
